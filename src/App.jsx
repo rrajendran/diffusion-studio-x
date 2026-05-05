@@ -4,6 +4,7 @@ import ChatWindow from './components/ChatWindow.jsx'
 import ChatInput from './components/ChatInput.jsx'
 import ProviderBadge from './components/ProviderBadge.jsx'
 import ImagePreviewPanel from './components/ImagePreviewPanel.jsx'
+import SettingsPage from './components/SettingsPage.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useModels } from './hooks/useModels.js'
 import { loadConfig, saveConfig } from './store/chatStore.js'
@@ -19,10 +20,14 @@ export default function App() {
   const [config, setConfig] = useState(() => {
     const saved = loadConfig()
     return {
-      provider: saved.provider ?? 'huggingface',
-      model:    saved.model   ?? 'stabilityai/stable-diffusion-xl-base-1.0',
-      apiKey:   saved.apiKey  ?? '',
-      llmModel: saved.llmModel ?? 'llama3',
+      provider:        saved.provider        ?? 'huggingface',
+      model:           saved.model           ?? 'stabilityai/stable-diffusion-xl-base-1.0',
+      apiKey:          saved.apiKey          ?? '',
+      llmModel:        saved.llmModel        ?? 'llama3',
+      randomSeed:      saved.randomSeed      ?? true,
+      seed:            saved.seed            ?? 42,
+      inferenceSteps:  saved.inferenceSteps  ?? 4,
+      guidanceScale:   saved.guidanceScale   ?? 0.0,
     }
   })
 
@@ -44,6 +49,7 @@ export default function App() {
   const { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, sendMessage, stopGeneration } = useChat(config)
   const [preview, setPreview] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('img-gen-theme') ?? 'dark')
+  const [showSettings, setShowSettings] = useState(false)
 
   const toggleTheme = useCallback(() => {
     setTheme(t => {
@@ -125,9 +131,11 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
-        onSelectChat={setActiveChatId}
-        onNewChat={createChat}
+        onSelectChat={id => { setActiveChatId(id); setShowSettings(false) }}
+        onNewChat={() => { createChat(); setShowSettings(false) }}
         onDeleteChat={deleteChat}
+        showSettings={showSettings}
+        onToggleSettings={() => setShowSettings(s => !s)}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -135,9 +143,9 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
           <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
             <div className="flex items-center gap-2">
               <span className="text-white font-medium text-sm truncate max-w-xs">
-                {activeChat?.title ?? 'Diffusion Studio X'}
+                {showSettings ? 'Settings' : (activeChat?.title ?? 'Diffusion Studio X')}
               </span>
-              <ProviderBadge provider={config.provider} />
+              {!showSettings && <ProviderBadge provider={config.provider} />}
             </div>
             <button
               onClick={toggleTheme}
@@ -148,7 +156,16 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
             </button>
           </div>
 
-          {activeChat ? (
+          {showSettings ? (
+            <SettingsPage
+              config={config}
+              onConfigChange={handleConfigChange}
+              imageModels={imageModels}
+              llmModels={llmModels}
+              loadingModels={loadingModels}
+              onClose={() => setShowSettings(false)}
+            />
+          ) : activeChat ? (
             <>
               <ChatWindow messages={activeChat.messages} loading={loading} onImageClick={handleImageClick} />
               <ChatInput
@@ -177,9 +194,9 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
 
         <div
           className="flex-shrink-0 overflow-hidden transition-all duration-300"
-          style={{ width: preview ? '40%' : '0' }}
+          style={{ width: preview && !showSettings ? '40%' : '0' }}
         >
-          {preview && (
+          {preview && !showSettings && (
             <ImagePreviewPanel
               imageUrl={preview.imageUrl}
               prompt={preview.prompt}

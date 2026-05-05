@@ -90,11 +90,26 @@ app.get('/api/image/capabilities', (req, res) => {
   proxyReq.end()
 })
 
-app.post('/api/image/generate', (req, res) => {
-  const { prompt = '', model = '', width, height, reference_image } = req.body
+app.post('/api/image/generate', async (req, res) => {
+  let { prompt = '', model = '', width, height, reference_image } = req.body
   const mode = reference_image ? 'i2i' : 't2i'
   const reqId = Date.now()
   console.log(`[image:${reqId}] → generate | model=${model} ${width}x${height} mode=${mode} prompt="${prompt.slice(0, 60)}"`)
+
+  // Convert a saved /output/<file> web path back to a base64 data URL so the
+  // Python server can decode it.  This happens when lastImageUrl (from a prior
+  // generation that was persisted to disk) is reused as a reference image.
+  if (reference_image && reference_image.startsWith('/output/')) {
+    try {
+      const filePath = join(OUTPUT_DIR, reference_image.replace(/^\/output\//, ''))
+      const buf = await readFile(filePath)
+      const mime = detectMime(buf) ?? 'image/jpeg'
+      reference_image = `data:${mime};base64,${buf.toString('base64')}`
+      req.body = { ...req.body, reference_image }
+    } catch (err) {
+      console.warn(`[image:${reqId}] could not resolve reference_image path: ${err.message}`)
+    }
+  }
 
   const body = JSON.stringify(req.body)
   const options = {
@@ -134,7 +149,8 @@ app.post('/api/image/generate', (req, res) => {
 
 // Proxy all requests to the local HuggingFace server to avoid browser CORS restrictions
 app.use('/api/hf', async (req, res) => {
-  const hfUrl = `http://localhost:8000${req.url}`
+  const hfPath = req.originalUrl.replace(/^\/api\/hf/, '') || '/'
+  const hfUrl = `http://localhost:${IMAGE_SERVER_PORT}${hfPath}`
   console.log(`[HF proxy] ${req.method} ${hfUrl}`, req.method !== 'GET' ? JSON.stringify(req.body).slice(0, 300) : '')
   try {
     const headers = { 'Content-Type': 'application/json' }

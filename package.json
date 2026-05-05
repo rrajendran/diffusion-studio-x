@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n vite,server,images -c cyan,yellow,magenta \"vite --host 0.0.0.0\" \"node server.js\" \"/opt/homebrew/opt/python@3.13/bin/python3.13 image_server.py\"",
+    "dev": "concurrently -n vite,server,images -c cyan,yellow,magenta \"vite --host 0.0.0.0\" \"node server.js\" \".venv/bin/python image_server.py\"",
     "dev:ui": "vite --host 0.0.0.0",
     "dev:server": "node server.js",
     "build": "vite build",

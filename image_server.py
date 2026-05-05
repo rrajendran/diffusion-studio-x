@@ -29,13 +29,16 @@ import io
 import os
 import threading
 import time
+import traceback
+
+import random
 
 import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image as PILImage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── MPS memory pressure control ───────────────────────────────────────────────
@@ -67,9 +70,34 @@ print(f"[image-server] device={DEVICE} dtype={DTYPE} compile={_COMPILE_ENABLED}"
 
 
 # ── Image encode/decode helpers ───────────────────────────────────────────────
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def _decode_image(data_url: str) -> PILImage.Image:
-    """Decode a base64 data URL or raw base64 string to an RGB PIL Image."""
-    _, b64 = data_url.split(",", 1) if "," in data_url else ("", data_url)
+    """Decode a base64 data URL, raw base64 string, local file path, or HTTP URL to an RGB PIL Image."""
+    s = data_url.strip()
+
+    # Local file path: /output/filename.jpg  (web path served by the Node bridge)
+    if s.startswith("/"):
+        file_path = os.path.join(_SCRIPT_DIR, s.lstrip("/"))
+        return PILImage.open(file_path).convert("RGB")
+
+    # Absolute HTTP/HTTPS URL
+    if s.startswith("http://") or s.startswith("https://"):
+        import urllib.request
+        with urllib.request.urlopen(s) as resp:  # noqa: S310
+            return PILImage.open(io.BytesIO(resp.read())).convert("RGB")
+
+    # Base64 data URL or raw base64
+    _, b64 = s.split(",", 1) if "," in s else ("", s)
+    # Normalise to standard base64:
+    # 1. Remove ALL whitespace (including embedded newlines from multi-line
+    #    encoders) before length calculation — strip() only removes edges.
+    # 2. Convert URL-safe chars (-→+ and _→/).
+    # 3. Strip any existing padding, then re-add the correct amount so that
+    #    len(b64) always equals 0 mod 4 without double-padding.
+    b64 = "".join(b64.split()).replace("-", "+").replace("_", "/")
+    b64 = b64.rstrip("=")
+    b64 += "=" * (-len(b64) % 4)
     return PILImage.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
 
 
@@ -221,7 +249,17 @@ class GLMImageAdapter(ModelAdapter):
             load_kwargs["device_map"] = "auto"
 
         pipe = GlmImagePipeline.from_pretrained(model_id, **load_kwargs)
-        if DEVICE != "cuda":
+
+        if DEVICE == "cuda":
+            pass  # device_map="auto" already handled placement
+        elif DEVICE == "mps":
+            # GLM-Image has two large sub-models (AR transformer + DiT).
+            # Loading both onto the Metal heap at once exhausts unified memory
+            # and triggers an OOM SIGKILL.  enable_model_cpu_offload() keeps
+            # weights on CPU and moves each component to MPS only for its
+            # forward pass, reducing peak Metal allocation by ~50%.
+            pipe.enable_model_cpu_offload()
+        else:
             pipe = pipe.to(DEVICE)
 
         _apply_pipeline_optimizations(pipe)
@@ -244,6 +282,28 @@ class GLMImageAdapter(ModelAdapter):
         # match the target output size — mismatched sizes cause a tensor shape error.
         if ref_img.size != (req.width, req.height):
             ref_img = ref_img.resize((req.width, req.height), PILImage.LANCZOS)
+
+        if DEVICE == "mps":
+            # enable_model_cpu_offload() keeps weights on CPU but the image
+            # processor places pixel_values on MPS, causing a device mismatch
+            # inside vision_language_encoder.  Temporarily move the encoder to
+            # MPS for the i2i call so weights and inputs are on the same device.
+            pipe.vision_language_encoder.to("mps")
+            try:
+                result = _call_with_progress(
+                    pipe,
+                    prompt=req.prompt,
+                    image=[ref_img],
+                    height=req.height,
+                    width=req.width,
+                    num_inference_steps=_effective_steps(req.num_inference_steps, self.default_steps),
+                    guidance_scale=_effective_guidance(req.guidance_scale, self.default_guidance),
+                ).images[0]
+            finally:
+                pipe.vision_language_encoder.to("cpu")
+                torch.mps.empty_cache()
+            return result
+
         return _call_with_progress(
             pipe,
             prompt=req.prompt,
@@ -263,7 +323,7 @@ class QwenImageAdapter(ModelAdapter):
     i2i: QwenImageEditPlusPipeline (e.g. Qwen/Qwen-Image-Edit-2511)
     """
 
-    default_steps = 40
+    default_steps = 20
     default_guidance = 4.0
     supports_i2i = True
 
@@ -322,7 +382,7 @@ class QwenImageAdapter(ModelAdapter):
             pipe_i2i,
             image=[ref_img],
             prompt=req.prompt,
-            generator=torch.manual_seed(0),
+            generator=torch.manual_seed(req.seed),
             true_cfg_scale=_effective_guidance(req.guidance_scale, self.default_guidance),
             negative_prompt=" ",
             guidance_scale=1.0,
@@ -503,6 +563,7 @@ class GenerateRequest(BaseModel):
     height: int = 512
     num_inference_steps: int = 4    # sentinel — adapters substitute their own default
     guidance_scale: float = 0.0     # sentinel — adapters substitute their own default
+    seed: int = Field(default_factory=lambda: random.randint(0, 2**32 - 1))
     reference_image: str | None = None  # base64 data URL; triggers i2i when present
 
 
@@ -533,6 +594,10 @@ def _ms(t: float) -> str:
 def generate(req: GenerateRequest):
     if not req.model:
         raise HTTPException(status_code=400, detail="model is required")
+
+    # Reset progress immediately so any poll during model load sees a clean state
+    # rather than the stale 100% from the previous generation.
+    _progress.update({"step": 0, "total": 0})
 
     t_req = time.time()
     req_id = int(t_req * 1000) % 1_000_000
@@ -583,6 +648,7 @@ def generate(req: GenerateRequest):
                     print(f"[gen:{req_id}]   t2i inference {_ms(t_inf)}", flush=True)
         except Exception as e:
             print(f"[gen:{req_id}] ✗ inference error ({mode}) after {_ms(t_req)}: {e}", flush=True)
+            traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Inference error ({mode}): {e}")
 
     t_enc = time.time()
@@ -590,8 +656,91 @@ def generate(req: GenerateRequest):
     print(f"[gen:{req_id}]   encode {_ms(t_enc)} | size={image.size}", flush=True)
 
     elapsed = round(time.time() - t_req, 2)
-    print(f"[gen:{req_id}] ✓ done | mode={mode} total={elapsed}s", flush=True)
-    return {"imageUrl": image_url, "mode": mode, "elapsed": elapsed}
+    print(f"[gen:{req_id}] ✓ done | mode={mode} total={elapsed}s seed={req.seed}", flush=True)
+    return {
+        "imageUrl": image_url,
+        "mode": mode,
+        "elapsed": elapsed,
+        "meta": {
+            "model": req.model,
+            "seed": req.seed,
+            "steps": effective_steps,
+            "width": req.width,
+            "height": req.height,
+            "guidance_scale": round(_effective_guidance(req.guidance_scale, adapter.default_guidance), 2),
+        },
+    }
+
+
+# ── Chat completions (OpenAI-compatible) ─────────────────────────────────────
+# Used by the Enhance feature when the HuggingFace provider is active.
+# Loads the requested model as a causal-LM text pipeline (separate from the
+# image pipeline) and streams a single non-streaming response.
+
+_chat_model_id: str | None = None
+_chat_pipeline = None
+_chat_lock = threading.Lock()
+
+
+def _get_chat_pipeline(model_id: str):
+    global _chat_model_id, _chat_pipeline
+    if _chat_model_id == model_id and _chat_pipeline is not None:
+        return _chat_pipeline
+    print(f"[chat] loading text model {model_id!r} ...", flush=True)
+    from transformers import pipeline as hf_pipeline
+    _chat_pipeline = hf_pipeline(
+        "text-generation",
+        model=model_id,
+        device_map="auto",
+        dtype=DTYPE,
+    )
+    _chat_model_id = model_id
+    print(f"[chat] model ready", flush=True)
+    return _chat_pipeline
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: str = ""
+    messages: list[ChatMessage]
+    max_tokens: int = 512
+    temperature: float = 0.7
+    stream: bool = False
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(req: ChatCompletionRequest):
+    if not req.model:
+        raise HTTPException(status_code=400, detail="model is required")
+    t0 = time.time()
+    try:
+        with _chat_lock:
+            pipe = _get_chat_pipeline(req.model)
+            msgs = [{"role": m.role, "content": m.content} for m in req.messages]
+            out = pipe(msgs, max_new_tokens=req.max_tokens, temperature=req.temperature, do_sample=True)
+        # transformers text-gen pipeline returns generated tokens after the prompt
+        generated = out[0].get("generated_text", "")
+        if isinstance(generated, list):
+            # chat-template output: last message is the assistant turn
+            content = generated[-1].get("content", "") if generated else ""
+        else:
+            content = str(generated)
+        elapsed = round(time.time() - t0, 2)
+        print(f"[chat] done in {elapsed}s | model={req.model}", flush=True)
+        return {
+            "id": f"chatcmpl-{int(t0*1000)}",
+            "object": "chat.completion",
+            "model": req.model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+            "usage": {},
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Chat completion error: {e}")
 
 
 if __name__ == "__main__":

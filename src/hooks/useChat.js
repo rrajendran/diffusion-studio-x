@@ -96,7 +96,7 @@ export function useChat(config) {
         const genRes = await generateImage(prompt, config, lastImageUrl, aspectRatio, signal, referenceImageUrl)
         setChats(prev => prev.map(c =>
           c.id === targetId
-            ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: prompt, imageUrl: genRes.imageUrl }] }
+            ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: prompt, imageUrl: genRes.imageUrl, meta: genRes.meta ?? null }] }
             : c
         ))
         setLoading(false)
@@ -163,14 +163,16 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
       }
 
       let imageUrl = null
+      let imageMeta = null
       if (parsed.imagePrompt) {
         const genRes = await generateImage(parsed.imagePrompt, config, lastImageUrl, aspectRatio, signal, referenceImageUrl)
         imageUrl = genRes.imageUrl
+        imageMeta = genRes.meta ?? null
       }
 
       setChats(prev => prev.map(c =>
         c.id === targetId
-          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl }] }
+          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl, meta: imageMeta }] }
           : c
       ))
       setLoading(false)

@@ -48,6 +48,16 @@ export default function ChatMessage({ message, onImageClick }) {
           <ImageResult imageUrl={message.imageUrl} prompt={message.content} onExpand={onImageClick} />
         )}
 
+        {message.meta && (
+          <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-white/40 text-xs font-mono">
+            <span title="Model">{message.meta.model.split('/').pop()}</span>
+            <span title="Seed">seed {message.meta.seed}</span>
+            <span title="Steps">steps {message.meta.steps}</span>
+            <span title="Resolution">{message.meta.width}×{message.meta.height}</span>
+            <span title="Guidance scale">cfg {message.meta.guidance_scale}</span>
+          </div>
+        )}
+
         {/* Copy actions — visible on hover */}
         {!message.error && (
           <div className="flex gap-1 mt-2 opacity-0 group-hover:opacity-100 transition-opacity duration-150">

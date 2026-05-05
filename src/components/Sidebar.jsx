@@ -1,4 +1,4 @@
-export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat }) {
+export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat, showSettings, onToggleSettings }) {
   return (
     <aside className="w-64 flex-shrink-0 glass m-3 flex flex-col overflow-hidden">
       <div className="px-4 pt-4 pb-3">
@@ -31,7 +31,7 @@ export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, 
             key={chat.id}
             onClick={() => onSelectChat(chat.id)}
             className={`group flex items-center justify-between rounded-xl px-3 py-2.5 mb-1 cursor-pointer transition-all ${
-              chat.id === activeChatId
+              !showSettings && chat.id === activeChatId
                 ? 'bg-white/20 border border-white/25'
                 : 'hover:bg-white/10'
             }`}
@@ -51,6 +51,24 @@ export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, 
             </button>
           </div>
         ))}
+      </div>
+
+      {/* Settings button pinned to bottom */}
+      <div className="px-3 pb-3 pt-2 border-t border-white/10">
+        <button
+          onClick={onToggleSettings}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all ${
+            showSettings
+              ? 'bg-white/20 border border-white/25 text-white'
+              : 'text-white/50 hover:text-white hover:bg-white/10'
+          }`}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+          Settings
+        </button>
       </div>
     </aside>
   )

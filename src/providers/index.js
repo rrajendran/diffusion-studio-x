@@ -5,19 +5,24 @@ import * as huggingface from './huggingface.js'
 import { getScaledDimensions as getDimensions } from '../config/aspectRatios.js'
 
 // lastImageUrl: base64 data URL of the previous image, passed as edit context
-export async function generateImage(prompt, { provider, model, apiKey }, lastImageUrl = null, aspectRatio = null, signal = null, referenceImageUrl = null) {
+export async function generateImage(prompt, { provider, model, apiKey, randomSeed, seed, inferenceSteps, guidanceScale }, lastImageUrl = null, aspectRatio = null, signal = null, referenceImageUrl = null) {
   const { width, height } = getDimensions(aspectRatio)
   const hasRef = !!referenceImageUrl
   const hasLast = !!lastImageUrl
   console.log(`[provider] generate | provider=${provider} model=${model} ${width}x${height} | refImage=${hasRef} lastImage=${hasLast} | prompt="${prompt.slice(0, 80)}"`)
   const t0 = performance.now()
 
+  // Resolve seed: use random if randomSeed flag is set (or not specified)
+  const resolvedSeed = (randomSeed ?? true) ? undefined : (seed ?? 42)
+
+  const genParams = { width, height, inferenceSteps, guidanceScale, seed: resolvedSeed }
+
   let result
   switch (provider) {
     case 'ollama':       result = await ollama.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
     case 'lmstudio':    result = await lmstudio.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
     case 'llamacpp':    result = await llamacpp.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
-    case 'huggingface': result = await huggingface.generate(prompt, model, apiKey, lastImageUrl, width, height, signal, referenceImageUrl); break
+    case 'huggingface': result = await huggingface.generate(prompt, model, apiKey, lastImageUrl, signal, referenceImageUrl, genParams); break
     default:            throw new Error(`Unknown provider: ${provider}`)
   }
 
