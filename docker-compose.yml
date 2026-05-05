@@ -1,0 +1,28 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:80"
+    depends_on:
+      - bridge
+    restart: unless-stopped
+
+  # Bridge server — runs `ollama run <model>` via CLI and exposes the result over HTTP.
+  # Requires the host to have `ollama` installed and available on PATH.
+  bridge:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /usr/local/bin/ollama:/usr/local/bin/ollama   # mount host ollama binary
+    command: node server.js
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    restart: unless-stopped
+
+  # LM Studio and llama.cpp run on the host — start them separately.
+  # From the browser they are reachable at:
+  #   LM Studio  → http://localhost:1234
+  #   llama.cpp  → http://localhost:8080

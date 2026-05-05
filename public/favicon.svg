@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#060b18"/>
+      <stop offset="100%" stop-color="#0e0c2e"/>
+    </linearGradient>
+    <radialGradient id="swirl1" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0.9"/>
+      <stop offset="40%" stop-color="#6c47ff" stop-opacity="0.85"/>
+      <stop offset="70%" stop-color="#c026d3" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#0d1032" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="swirl2" cx="60%" cy="60%" r="55%">
+      <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#7c3aed" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#060b18" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+
+  <!-- Swirl layers -->
+  <circle cx="32" cy="32" r="28" fill="url(#swirl2)"/>
+  <circle cx="28" cy="28" r="22" fill="url(#swirl1)" opacity="0.85"/>
+
+  <!-- D-letter swirl shape -->
+  <g filter="url(#glow)">
+    <!-- Outer arc of D -->
+    <path d="M22 16 Q46 16 46 32 Q46 48 22 48 L22 42 Q38 42 38 32 Q38 22 22 22 Z"
+          fill="none" stroke="url(#swirl1)" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- Inner swirl -->
+    <path d="M26 24 Q36 24 36 32 Q36 40 26 40"
+          fill="none" stroke="#00e5ff" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+    <!-- Spiral accent -->
+    <path d="M30 28 Q34 28 34 32 Q34 36 30 36 Q28 36 28 34"
+          fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" opacity="0.8"/>
+    <!-- Center dot -->
+    <circle cx="31" cy="32" r="2.5" fill="#00e5ff" opacity="0.95"/>
+  </g>
+
+  <!-- Corner dots (neural network accent) -->
+  <g opacity="0.6">
+    <circle cx="48" cy="16" r="1.5" fill="#22d3ee"/>
+    <circle cx="54" cy="12" r="1" fill="#818cf8"/>
+    <circle cx="52" cy="20" r="1" fill="#22d3ee"/>
+    <line x1="48" y1="16" x2="54" y2="12" stroke="#22d3ee" stroke-width="0.8" opacity="0.5"/>
+    <line x1="48" y1="16" x2="52" y2="20" stroke="#818cf8" stroke-width="0.8" opacity="0.5"/>
+    <line x1="54" y1="12" x2="52" y2="20" stroke="#22d3ee" stroke-width="0.8" opacity="0.4"/>
+  </g>
+</svg>
