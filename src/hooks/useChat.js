@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { loadChats, saveChats, loadActiveId, saveActiveId, newChatObj } from '../store/chatStore.js'
 import { generateImage } from '../providers/index.js'
+import { LMSTUDIO, OLLAMA } from '../lib/ports.js'
 
 export function useChat(config) {
   const [chats, setChats] = useState([])
@@ -129,8 +130,8 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
         : [{ role: 'system', content: systemPrompt }, { role: 'user', content: `History:\n${historyStr}\n\nCurrent User Input: ${prompt}` }]
 
       const llmUrl = isLmStudio
-        ? 'http://localhost:1234/v1/chat/completions'
-        : 'http://localhost:11434/api/chat'
+        ? `${LMSTUDIO}/v1/chat/completions`
+        : `${OLLAMA}/api/chat`
 
       const llmRes = await fetch(llmUrl, {
         method: 'POST',
@@ -172,7 +173,7 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
 
       setChats(prev => prev.map(c =>
         c.id === targetId
-          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl, meta: imageMeta }] }
+          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl, imagePrompt: parsed.imagePrompt ?? null, meta: imageMeta }] }
           : c
       ))
       setLoading(false)

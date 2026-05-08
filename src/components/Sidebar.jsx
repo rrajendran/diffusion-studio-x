@@ -1,4 +1,4 @@
-export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat, showSettings, onToggleSettings }) {
+export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, onDeleteChat, showSettings, onToggleSettings, showGallery, onToggleGallery }) {
   return (
     <aside className="w-64 flex-shrink-0 glass m-3 flex flex-col overflow-hidden">
       <div className="px-4 pt-4 pb-3">
@@ -53,8 +53,22 @@ export default function Sidebar({ chats, activeChatId, onSelectChat, onNewChat, 
         ))}
       </div>
 
-      {/* Settings button pinned to bottom */}
-      <div className="px-3 pb-3 pt-2 border-t border-white/10">
+      {/* Bottom nav — Gallery + Settings */}
+      <div className="px-3 pb-3 pt-2 border-t border-white/10 flex flex-col gap-1">
+        <button
+          onClick={onToggleGallery}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all ${
+            showGallery
+              ? 'bg-white/20 border border-white/25 text-white'
+              : 'text-white/50 hover:text-white hover:bg-white/10'
+          }`}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
+            <rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>
+          </svg>
+          Gallery
+        </button>
         <button
           onClick={onToggleSettings}
           className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-all ${

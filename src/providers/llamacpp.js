@@ -1,10 +1,12 @@
+import { LLAMACPP } from '../lib/ports.js'
+
 export async function generate(prompt, _model, _lastImageUrl, width = 512, height = 512, signal = null, referenceImageUrl = null) {
   // llama.cpp accepts image_data as [{data: base64string, id: 1}] for multimodal models
   const imageData = referenceImageUrl
     ? [{ data: referenceImageUrl.replace(/^data:image\/\w+;base64,/, ''), id: 1 }]
     : undefined
 
-  const res = await fetch('http://localhost:8080/completion', {
+  const res = await fetch(`${LLAMACPP}/completion`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, n_predict: 256, width, height, ...(imageData ? { image_data: imageData } : {}) }),

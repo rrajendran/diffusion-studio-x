@@ -3,9 +3,10 @@ import * as lmstudio from './lmstudio.js'
 import * as llamacpp from './llamacpp.js'
 import * as huggingface from './huggingface.js'
 import { getScaledDimensions as getDimensions } from '../config/aspectRatios.js'
+import { BRIDGE } from '../lib/ports.js'
 
 // lastImageUrl: base64 data URL of the previous image, passed as edit context
-export async function generateImage(prompt, { provider, model, apiKey, randomSeed, seed, inferenceSteps, guidanceScale }, lastImageUrl = null, aspectRatio = null, signal = null, referenceImageUrl = null) {
+export async function generateImage(prompt, { provider, model, apiKey, randomSeed, seed, inferenceSteps, guidanceScale, hfBaseUrl, ollamaBaseUrl }, lastImageUrl = null, aspectRatio = null, signal = null, referenceImageUrl = null) {
   const { width, height } = getDimensions(aspectRatio)
   const hasRef = !!referenceImageUrl
   const hasLast = !!lastImageUrl
@@ -15,11 +16,11 @@ export async function generateImage(prompt, { provider, model, apiKey, randomSee
   // Resolve seed: use random if randomSeed flag is set (or not specified)
   const resolvedSeed = (randomSeed ?? true) ? undefined : (seed ?? 42)
 
-  const genParams = { width, height, inferenceSteps, guidanceScale, seed: resolvedSeed }
+  const genParams = { width, height, inferenceSteps, guidanceScale, seed: resolvedSeed, hfBaseUrl: hfBaseUrl || undefined }
 
   let result
   switch (provider) {
-    case 'ollama':       result = await ollama.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
+    case 'ollama':       result = await ollama.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl, ollamaBaseUrl || undefined); break
     case 'lmstudio':    result = await lmstudio.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
     case 'llamacpp':    result = await llamacpp.generate(prompt, model, lastImageUrl, width, height, signal, referenceImageUrl); break
     case 'huggingface': result = await huggingface.generate(prompt, model, apiKey, lastImageUrl, signal, referenceImageUrl, genParams); break
@@ -31,7 +32,7 @@ export async function generateImage(prompt, { provider, model, apiKey, randomSee
   // Persist base64 data URLs to the output folder via the bridge server
   if (result?.imageUrl?.startsWith('data:')) {
     try {
-      const saveRes = await fetch('http://localhost:3001/api/save-image', {
+      const saveRes = await fetch(`${BRIDGE}/api/save-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageUrl: result.imageUrl, prompt }),
@@ -39,7 +40,8 @@ export async function generateImage(prompt, { provider, model, apiKey, randomSee
       })
       if (saveRes.ok) {
         const saved = await saveRes.json()
-        result = { ...result, imageUrl: saved.imageUrl }
+        const savedUrl = saved.imageUrl?.startsWith('/') ? `${BRIDGE}${saved.imageUrl}` : saved.imageUrl
+        result = { ...result, imageUrl: savedUrl }
       }
     } catch {
       // non-fatal — keep the data URL if the save fails

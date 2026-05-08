@@ -1,13 +1,17 @@
 import { useState, useCallback, useEffect } from 'react'
+import { ToastProvider } from './components/Toast.jsx'
 import Sidebar from './components/Sidebar.jsx'
 import ChatWindow from './components/ChatWindow.jsx'
 import ChatInput from './components/ChatInput.jsx'
 import ProviderBadge from './components/ProviderBadge.jsx'
 import ImagePreviewPanel from './components/ImagePreviewPanel.jsx'
 import SettingsPage from './components/SettingsPage.jsx'
+import GalleryPage from './components/GalleryPage.jsx'
+import Lightbox from './components/Lightbox.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useModels } from './hooks/useModels.js'
 import { loadConfig, saveConfig } from './store/chatStore.js'
+import { BRIDGE, LMSTUDIO, OLLAMA } from './lib/ports.js'
 
 const PROVIDER_DEFAULTS = {
   huggingface: 'stabilityai/stable-diffusion-xl-base-1.0',
@@ -28,10 +32,12 @@ export default function App() {
       seed:            saved.seed            ?? 42,
       inferenceSteps:  saved.inferenceSteps  ?? 4,
       guidanceScale:   saved.guidanceScale   ?? 0.0,
+      hfBaseUrl:       saved.hfBaseUrl       ?? '',
+      ollamaBaseUrl:   saved.ollamaBaseUrl   ?? '',
     }
   })
 
-  const { imageModels, llmModels, loadingModels, modelCapabilities } = useModels(config.provider)
+  const { imageModels, llmModels, loadingModels, modelCapabilities } = useModels(config.provider, config)
 
   // Auto-pick first available when the list loads and current selection isn't in it
   useEffect(() => {
@@ -40,6 +46,17 @@ export default function App() {
     }
   }, [imageModels]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Preload the selected model into the image server as soon as the model list is
+  // confirmed (so it's warm before the user sends their first prompt).
+  useEffect(() => {
+    if (config.provider !== 'huggingface' || !config.model || loadingModels) return
+    fetch(`${BRIDGE}/api/image/preload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: config.model }),
+    }).catch(() => {/* non-fatal */})
+  }, [config.model, config.provider, loadingModels]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (llmModels.length > 0 && !llmModels.includes(config.llmModel)) {
       setConfig(prev => { const next = { ...prev, llmModel: llmModels[0] }; saveConfig(next); return next })
@@ -47,9 +64,26 @@ export default function App() {
   }, [llmModels]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, sendMessage, stopGeneration } = useChat(config)
-  const [preview, setPreview] = useState(null)
+  const [preview, setPreview] = useState(null)   // { imageUrl, prompt, meta? } | null
+  const [editPrefill, setEditPrefill] = useState(null)  // message to prefill ChatInput for editing
   const [theme, setTheme] = useState(() => localStorage.getItem('img-gen-theme') ?? 'dark')
   const [showSettings, setShowSettings] = useState(false)
+  const [showGallery, setShowGallery] = useState(false)
+
+  // Listen for native menu "Preferences" event emitted by Tauri Rust backend
+  useEffect(() => {
+    let unlisten = null
+    // Only available inside Tauri — guard against browser dev mode
+    if (window.__TAURI__) {
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('open-preferences', () => {
+          setShowSettings(true)
+          setShowGallery(false)
+        }).then(fn => { unlisten = fn })
+      })
+    }
+    return () => { if (unlisten) unlisten() }
+  }, [])
 
   const toggleTheme = useCallback(() => {
     setTheme(t => {
@@ -70,7 +104,7 @@ export default function App() {
     })
   }, [])
 
-  const handleImageClick = useCallback((imageUrl, prompt) => setPreview({ imageUrl, prompt }), [])
+  const handleImageClick = useCallback((imageUrl, prompt, meta) => setPreview({ imageUrl, prompt, meta: meta ?? null }), [])
 
   const handleRewrite = useCallback(async (text) => {
     const systemPrompt = `You are an expert prompt engineer for an image generation model.
@@ -79,11 +113,12 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
 
     const isHuggingFace = config.provider === 'huggingface'
     const isLmStudio = config.provider === 'lmstudio'
+    const ollamaBase = (config.ollamaBaseUrl || OLLAMA).replace(/\/$/, '')
     const url = isHuggingFace
-      ? 'http://localhost:3001/api/hf/v1/chat/completions'
+      ? `${BRIDGE}/api/hf/v1/chat/completions`
       : isLmStudio
-        ? 'http://localhost:1234/v1/chat/completions'
-        : 'http://localhost:11434/api/chat'
+        ? `${LMSTUDIO}/v1/chat/completions`
+        : `${ollamaBase}/api/chat`
 
     const messages = (isHuggingFace || isLmStudio)
       ? [{ role: 'user', content: `${systemPrompt}\n\n${text}` }]
@@ -127,15 +162,18 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
     : 'dsx-bg-light'
 
   return (
+    <ToastProvider>
     <div className={`theme-${theme} h-screen ${bgClass} flex overflow-hidden`}>
       <Sidebar
         chats={chats}
         activeChatId={activeChatId}
-        onSelectChat={id => { setActiveChatId(id); setShowSettings(false) }}
-        onNewChat={() => { createChat(); setShowSettings(false) }}
+        onSelectChat={id => { setActiveChatId(id); setShowSettings(false); setShowGallery(false) }}
+        onNewChat={() => { createChat(); setShowSettings(false); setShowGallery(false) }}
         onDeleteChat={deleteChat}
         showSettings={showSettings}
-        onToggleSettings={() => setShowSettings(s => !s)}
+        onToggleSettings={() => { setShowSettings(s => !s); setShowGallery(false) }}
+        showGallery={showGallery}
+        onToggleGallery={() => { setShowGallery(g => !g); setShowSettings(false) }}
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -143,9 +181,9 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
           <div className="flex items-center justify-between px-5 py-4 border-b border-white/10 flex-shrink-0">
             <div className="flex items-center gap-2">
               <span className="text-white font-medium text-sm truncate max-w-xs">
-                {showSettings ? 'Settings' : (activeChat?.title ?? 'Diffusion Studio X')}
+                {showSettings ? 'Settings' : showGallery ? 'Gallery' : (activeChat?.title ?? 'Diffusion Studio X')}
               </span>
-              {!showSettings && <ProviderBadge provider={config.provider} />}
+              {!showSettings && !showGallery && <ProviderBadge provider={config.provider} />}
             </div>
             <button
               onClick={toggleTheme}
@@ -165,11 +203,19 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
               loadingModels={loadingModels}
               onClose={() => setShowSettings(false)}
             />
+          ) : showGallery ? (
+            <GalleryPage
+              chats={chats}
+              onNavigateChat={(chatId) => {
+                setActiveChatId(chatId)
+                setShowGallery(false)
+              }}
+            />
           ) : activeChat ? (
             <>
-              <ChatWindow messages={activeChat.messages} loading={loading} onImageClick={handleImageClick} />
+              <ChatWindow messages={activeChat.messages} loading={loading} onImageClick={handleImageClick} onEdit={setEditPrefill} />
               <ChatInput
-                onSend={sendMessage}
+                onSend={(prompt, ratio, refImg) => { setEditPrefill(null); sendMessage(prompt, ratio, refImg) }}
                 loading={loading}
                 onStop={stopGeneration}
                 onRewrite={handleRewrite}
@@ -179,6 +225,7 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
                 llmModels={llmModels}
                 loadingModels={loadingModels}
                 modelCapabilities={modelCapabilities}
+                prefill={editPrefill}
               />
             </>
           ) : (
@@ -192,19 +239,19 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
           )}
         </main>
 
-        <div
-          className="flex-shrink-0 overflow-hidden transition-all duration-300"
-          style={{ width: preview && !showSettings ? '40%' : '0' }}
-        >
-          {preview && !showSettings && (
-            <ImagePreviewPanel
-              imageUrl={preview.imageUrl}
-              prompt={preview.prompt}
-              onClose={() => setPreview(null)}
-            />
-          )}
-        </div>
+        <div className="flex-shrink-0" />
       </div>
+
+      {/* Lightbox — rendered as portal over everything */}
+      {preview && (
+        <Lightbox
+          images={[{ imageUrl: preview.imageUrl, prompt: preview.prompt, meta: preview.meta }]}
+          index={0}
+          onIndex={() => {}}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </div>
+    </ToastProvider>
   )
 }

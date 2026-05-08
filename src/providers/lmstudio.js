@@ -1,5 +1,7 @@
+import { BRIDGE } from '../lib/ports.js'
+
 export async function generate(prompt, model, _lastImageUrl, width = 512, height = 512, signal = null, referenceImageUrl = null) {
-  const res = await fetch('http://localhost:3001/api/lmstudio/generate', {
+  const res = await fetch(`${BRIDGE}/api/lmstudio/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ prompt, model, width, height, referenceImageUrl }),

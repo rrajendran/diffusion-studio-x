@@ -1,8 +1,10 @@
-const BASE_URL = 'http://localhost:3001'
+import { BRIDGE } from '../lib/ports.js'
+const BASE_URL = BRIDGE
 
 export async function generate(prompt, model, _apiKey, lastImageUrl, signal = null, referenceImageUrl = null, genParams = {}) {
-  const { width = 512, height = 512, inferenceSteps, guidanceScale, seed } = genParams
+  const { width = 512, height = 512, inferenceSteps, guidanceScale, seed, hfBaseUrl } = genParams
   const body = { prompt, model, width, height }
+  if (hfBaseUrl) body.hfBaseUrl = hfBaseUrl
   if (inferenceSteps != null) body.num_inference_steps = inferenceSteps
   if (guidanceScale  != null) body.guidance_scale = guidanceScale
   if (seed           != null) body.seed = seed

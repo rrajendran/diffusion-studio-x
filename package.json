@@ -4,12 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -n vite,server,images -c cyan,yellow,magenta \"vite --host 0.0.0.0\" \"node server.js\" \".venv/bin/python image_server.py\"",
-    "dev:ui": "vite --host 0.0.0.0",
+    "kill-ports": "lsof -ti TCP:5173,3001,8001 | xargs kill -9 2>/dev/null; true",
+    "dev": "npm run kill-ports && concurrently -n server,images,vite -c yellow,magenta,cyan --kill-others-on-fail \"node server.js\" \".venv/bin/python hf-image-server/main.py\" \"wait-on http://localhost:3001/health && vite --host 0.0.0.0\"",
+    "dev:images": ".venv/bin/python hf-image-server/main.py",
+    "dev:ui": "vite --host 0.0.0.0 --port 5173 --strictPort",
     "dev:server": "node server.js",
     "build": "vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext js,jsx --report-unused-disable-directives --max-warnings 0"
+    "lint": "eslint src --ext js,jsx --report-unused-disable-directives --max-warnings 0",
+    "tauri": "tauri",
+    "tauri:dev": "npm run kill-ports && npm run build:server && tauri dev",
+    "tauri:build": "tauri build",
+    "build:server": "npx esbuild server.js --bundle --platform=node --format=cjs --outfile=server.bundle.cjs && npx pkg server.bundle.cjs --targets node20-macos-arm64 --no-bytecode --public --output src-tauri/binaries/bridge-aarch64-apple-darwin && cp src-tauri/binaries/bridge-aarch64-apple-darwin src-tauri/binaries/bridge-x86_64-apple-darwin && rm server.bundle.cjs",
+    "build:pyserver": "cd hf-image-server && ../.venv/bin/pyinstaller main.py --onedir --name hf-image-server --distpath ../src-tauri/binaries --paths ../.venv/lib/python3.13/site-packages --add-data \"routes.py:.\" --add-data \"services.py:.\" --add-data \"adaptors:adaptors\" --add-data \"domain:domain\" --hidden-import routes --hidden-import services --hidden-import adaptors --hidden-import domain --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.protocols.websockets.auto --hidden-import uvicorn.lifespan.on --collect-all diffusers --collect-all transformers --collect-all tokenizers --copy-metadata transformers --copy-metadata huggingface_hub --copy-metadata diffusers --copy-metadata tokenizers --copy-metadata safetensors --copy-metadata accelerate --copy-metadata tqdm --copy-metadata packaging --copy-metadata filelock --copy-metadata pyyaml --copy-metadata regex --copy-metadata numpy --noconfirm && mv ../src-tauri/binaries/hf-image-server/hf-image-server ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin && cp ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin ../src-tauri/binaries/hf-image-server/hf-image-server-x86_64-apple-darwin && for d in requests tqdm urllib3 idna certifi charset_normalizer; do cp -r ../.venv/lib/python3.13/site-packages/${d}-*.dist-info ../src-tauri/binaries/hf-image-server/_internal/ 2>/dev/null || true; done"
   },
   "dependencies": {
     "cors": "^2.8.6",
@@ -18,17 +25,22 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/cli": "^2.11.0",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.1",
+    "@yao-pkg/pkg": "^6.19.0",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.2.1",
+    "esbuild": "^0.28.0",
     "eslint": "^9.9.0",
     "eslint-plugin-react": "^7.35.0",
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-react-refresh": "^0.4.9",
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "wait-on": "^9.0.5"
   }
 }

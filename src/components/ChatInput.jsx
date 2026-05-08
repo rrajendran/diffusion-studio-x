@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ASPECT_RATIOS, DEFAULT_RATIO } from '../config/aspectRatios.js'
 import { supportsImageToImage } from '../hooks/useModels.js'
 
@@ -128,6 +128,7 @@ export default function ChatInput({
   config, onConfigChange,
   imageModels = [], llmModels = [], loadingModels = false,
   modelCapabilities = [],
+  prefill = null,
 }) {
   const [value, setValue] = useState('')
   const [ratio, setRatio] = useState(DEFAULT_RATIO)
@@ -136,6 +137,16 @@ export default function ChatInput({
   const [rewriteError, setRewriteError] = useState(null)
   const [listening, setListening] = useState(false)
   const [micError, setMicError] = useState(null)
+
+  // Populate textarea + reference image when the parent requests an edit
+  useEffect(() => {
+    if (!prefill) return
+    setValue(prefill.content ?? '')
+    setRefImage(prefill.referenceImageUrl
+      ? { dataUrl: prefill.referenceImageUrl, name: 'reference' }
+      : null
+    )
+  }, [prefill])
 
   const fileInputRef = useRef(null)
   const recognitionRef = useRef(null)

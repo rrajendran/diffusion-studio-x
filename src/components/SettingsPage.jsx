@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import { ASPECT_RATIOS, DEFAULT_RATIO } from '../config/aspectRatios.js'
+import { useServerStatus } from '../hooks/useServerStatus.js'
 
 const PROVIDERS = [
-  { value: 'huggingface', label: 'Hugging Face', desc: 'Local image server (port 8001) + HF Hub models' },
-  { value: 'ollama',      label: 'Ollama',        desc: 'Local Ollama server (port 11434)' },
+  { value: 'huggingface', label: 'Hugging Face', desc: 'External diffusers image server + HF Hub models' },
+  { value: 'ollama',      label: 'Ollama',        desc: 'Local or remote Ollama server' },
   { value: 'lmstudio',   label: 'LM Studio',     desc: 'Local LM Studio server (port 1234)' },
   { value: 'llamacpp',   label: 'llama.cpp',     desc: 'Local llama.cpp server (port 8080)' },
 ]
@@ -94,9 +95,29 @@ function Toggle({ checked, onChange }) {
   )
 }
 
+function StatusDot({ up }) {
+  if (up === null) return <span className="inline-block w-2 h-2 rounded-full bg-white/20" title="Checking…" />
+  return up
+    ? <span className="inline-block w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_1px_rgba(74,222,128,0.7)]" title="Online" />
+    : <span className="inline-block w-2 h-2 rounded-full bg-red-400 shadow-[0_0_6px_1px_rgba(248,113,113,0.7)]" title="Offline" />
+}
+
+function TextInput({ value, onChange, placeholder, monospace = false }) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      placeholder={placeholder}
+      className={`w-full bg-white/10 border border-white/20 rounded-xl text-white text-sm px-3 py-2 outline-none placeholder-white/20 ${monospace ? 'font-mono' : ''}`}
+    />
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 export default function SettingsPage({ config, onConfigChange, imageModels, llmModels, loadingModels, onClose }) {
   const [local, setLocal] = useState({ ...config })
+  const serverStatus = useServerStatus({ ollamaBaseUrl: local.ollamaBaseUrl, hfBaseUrl: local.hfBaseUrl })
 
   // Keep local in sync if parent config changes externally (e.g. model auto-select)
   useEffect(() => {
@@ -157,6 +178,36 @@ export default function SettingsPage({ config, onConfigChange, imageModels, llmM
               />
             </div>
           )}
+        </Section>
+
+        {/* Service URLs */}
+        <Section title="Service URLs">
+          <div className="px-4 py-3">
+            <div className="flex items-center gap-2 mb-1">
+              <p className="text-white text-sm">HF image server</p>
+              <StatusDot up={serverStatus.hfImages} />
+            </div>
+            <p className="text-white/35 text-xs mb-2">Base URL of the diffusers image server you run separately</p>
+            <TextInput
+              value={local.hfBaseUrl ?? 'http://127.0.0.1:8001'}
+              onChange={val => set('hfBaseUrl', val)}
+              placeholder="http://127.0.0.1:8001"
+              monospace
+            />
+          </div>
+          <div className="px-4 py-3">
+            <div className="flex items-center gap-2 mb-1">
+              <p className="text-white text-sm">Ollama base URL</p>
+              <StatusDot up={serverStatus.ollama} />
+            </div>
+            <p className="text-white/35 text-xs mb-2">Change if Ollama runs on a different host or port</p>
+            <TextInput
+              value={local.ollamaBaseUrl ?? 'http://127.0.0.1:11434'}
+              onChange={val => set('ollamaBaseUrl', val)}
+              placeholder="http://127.0.0.1:11434"
+              monospace
+            />
+          </div>
         </Section>
 
         {/* Models */}

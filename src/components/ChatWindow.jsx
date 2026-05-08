@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import ChatMessage from './ChatMessage.jsx'
+import { BRIDGE } from '../lib/ports.js'
 
-export default function ChatWindow({ messages, loading, onImageClick }) {
+export default function ChatWindow({ messages, loading, onImageClick, onEdit }) {
   const bottomRef = useRef(null)
   const [progress, setProgress] = useState({ step: 0, total: 0 })
   const pollRef = useRef(null)
@@ -19,7 +20,7 @@ export default function ChatWindow({ messages, loading, onImageClick }) {
     setProgress({ step: 0, total: 0 })
     pollRef.current = setInterval(async () => {
       try {
-        const r = await fetch('http://localhost:3001/api/image/progress')
+        const r = await fetch(`${BRIDGE}/api/image/progress`)
         if (r.ok) setProgress(await r.json())
       } catch { /* image server not running */ }
     }, 800)
@@ -37,7 +38,7 @@ export default function ChatWindow({ messages, loading, onImageClick }) {
         </div>
       )}
       {messages.map(msg => (
-        <ChatMessage key={msg.id} message={msg} onImageClick={onImageClick} />
+        <ChatMessage key={msg.id} message={msg} onImageClick={onImageClick} onEdit={onEdit} />
       ))}
       {loading && (
         <div className="flex justify-start mb-3">
