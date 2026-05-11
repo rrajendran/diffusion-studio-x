@@ -15,11 +15,7 @@ export const DEFAULT_RATIO = '16:9';
 
 export function getScaledDimensions(ratioValue, base = 512) {
   const ratio = ASPECT_RATIOS.find(r => r.value === ratioValue) ?? ASPECT_RATIOS[0];
-  
-  const scale = base / Math.min(ratio.width, ratio.height);
-
-  return {
-    width: Math.round((ratio.width * scale) / 64) * 64,
-    height: Math.round((ratio.height * scale) / 64) * 64,
-  };
+  // Return the pre-configured dimensions directly — they are already set to
+  // SD-friendly multiples of 64 and the correct pixel sizes for each ratio.
+  return { width: ratio.width, height: ratio.height };
 }

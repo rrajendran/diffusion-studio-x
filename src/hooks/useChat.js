@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { loadChats, saveChats, loadActiveId, saveActiveId, newChatObj } from '../store/chatStore.js'
 import { generateImage } from '../providers/index.js'
+import { LMSTUDIO, OLLAMA } from '../lib/ports.js'
 
 export function useChat(config) {
   const [chats, setChats] = useState([])
@@ -44,13 +45,16 @@ export function useChat(config) {
   const deleteChat = useCallback((id) => {
     setChats(prev => {
       const next = prev.filter(c => c.id !== id)
-      // if deleting active chat, switch to first remaining
       if (id === activeChatId) {
         setActiveChatIdInner(next[0]?.id ?? null)
       }
       return next
     })
   }, [activeChatId])
+
+  const renameChat = useCallback((id, title) => {
+    setChats(prev => prev.map(c => c.id === id ? { ...c, title: title.trim() || c.title } : c))
+  }, [])
 
   const stopGeneration = useCallback(() => {
     abortRef.current?.abort()
@@ -91,12 +95,12 @@ export function useChat(config) {
     try {
       const isHuggingFace = config.provider === 'huggingface'
 
-      // HuggingFace: send the prompt directly to image generation — no LLM intermediary
+      // HuggingFace: send the prompt directly to image/video generation — no LLM intermediary
       if (isHuggingFace) {
         const genRes = await generateImage(prompt, config, lastImageUrl, aspectRatio, signal, referenceImageUrl)
         setChats(prev => prev.map(c =>
           c.id === targetId
-            ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: prompt, imageUrl: genRes.imageUrl }] }
+            ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: prompt, imageUrl: genRes.imageUrl ?? null, videoUrl: genRes.videoUrl ?? null, meta: genRes.meta ?? null }] }
             : c
         ))
         setLoading(false)
@@ -128,9 +132,11 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
         ? [{ role: 'user', content: `${systemPrompt}\n\nHistory:\n${historyStr}\n\nCurrent User Input: ${prompt}` }]
         : [{ role: 'system', content: systemPrompt }, { role: 'user', content: `History:\n${historyStr}\n\nCurrent User Input: ${prompt}` }]
 
+      const lmBase = (config.lmstudioBaseUrl || LMSTUDIO).replace(/\/$/, '')
+      const ollamaBase = (config.ollamaBaseUrl || OLLAMA).replace(/\/$/, '')
       const llmUrl = isLmStudio
-        ? 'http://localhost:1234/v1/chat/completions'
-        : 'http://localhost:11434/api/chat'
+        ? `${lmBase}/v1/chat/completions`
+        : `${ollamaBase}/api/chat`
 
       const llmRes = await fetch(llmUrl, {
         method: 'POST',
@@ -140,7 +146,9 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
           messages: llmMessages,
           max_tokens: 512,
           stream: false,
-          ...(!isLmStudio ? { format: 'json' } : {}),
+          ...(isLmStudio
+            ? { response_format: { type: 'json_object' } }
+            : { format: 'json' }),
         }),
         signal,
       })
@@ -163,14 +171,16 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
       }
 
       let imageUrl = null
+      let imageMeta = null
       if (parsed.imagePrompt) {
         const genRes = await generateImage(parsed.imagePrompt, config, lastImageUrl, aspectRatio, signal, referenceImageUrl)
         imageUrl = genRes.imageUrl
+        imageMeta = genRes.meta ?? null
       }
 
       setChats(prev => prev.map(c =>
         c.id === targetId
-          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl }] }
+          ? { ...c, messages: [...c.messages, { id: `msg_${Date.now()}`, role: 'assistant', content: parsed.response, imageUrl, imagePrompt: parsed.imagePrompt ?? null, meta: imageMeta }] }
           : c
       ))
       setLoading(false)
@@ -188,5 +198,5 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
     }
   }, [activeChatId, config])
 
-  return { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, sendMessage, stopGeneration }
+  return { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, renameChat, sendMessage, stopGeneration }
 }

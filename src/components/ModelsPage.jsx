@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
+import { BRIDGE } from '../lib/ports.js'
 
 const HF_DIRECT = 'http://127.0.0.1:8000'
-const HF_BASE   = 'http://localhost:3001/api/hf'
+const HF_BASE   = `${BRIDGE}/api/hf`
 const POLL_INTERVAL = 2000
 
 export default function ModelsPage({ onBack, onModelLoaded }) {

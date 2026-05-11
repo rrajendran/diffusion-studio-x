@@ -25,9 +25,7 @@
               linear-gradient(135deg, #060b18 0%, #0e0c2e 45%, #090617 100%);
 }
 .dsx-bg-light {
-  background: radial-gradient(ellipse at 20% 0%, #dde8ff 0%, transparent 55%),
-              radial-gradient(ellipse at 80% 100%, #e8d9ff 0%, transparent 60%),
-              linear-gradient(135deg, #eef2ff 0%, #e8e0ff 45%, #f0ebff 100%);
+  background: #f5f5f7;
 }
 
 /* ── "X" brand accent ── */
@@ -82,61 +80,192 @@
   }
 }
 
-/* ── Light theme overrides ── */
+/* ── Light theme — macOS Ventura/Sonoma color palette ── */
 .theme-light .glass {
-  background: rgba(240, 242, 255, 0.75) !important;
-  border-color: rgba(99, 102, 241, 0.18) !important;
+  background: rgba(255,255,255,0.82) !important;
+  border-color: rgba(0,0,0,0.1) !important;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06) !important;
 }
 .theme-light .glass-dark {
-  background: rgba(230, 232, 255, 0.6) !important;
-  border-color: rgba(99, 102, 241, 0.12) !important;
+  background: rgba(255,255,255,0.72) !important;
+  border-color: rgba(0,0,0,0.08) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.05) !important;
 }
 .theme-light .glass-btn {
-  background: rgba(99, 102, 241, 0.1) !important;
-  border-color: rgba(99, 102, 241, 0.22) !important;
+  background: rgba(0,0,0,0.06) !important;
+  border-color: rgba(0,0,0,0.12) !important;
 }
 .theme-light .glass-btn:hover {
-  background: rgba(99, 102, 241, 0.2) !important;
+  background: rgba(0,0,0,0.1) !important;
+  border-color: rgba(0,0,0,0.18) !important;
 }
 .theme-light .scrollbar-thin {
-  scrollbar-color: rgba(99, 102, 241, 0.25) transparent;
+  scrollbar-color: rgba(0,0,0,0.2) transparent;
 }
 .theme-light .scrollbar-thin::-webkit-scrollbar-thumb {
-  background: rgba(99, 102, 241, 0.25);
+  background: rgba(0,0,0,0.2);
 }
 
-/* Text overrides */
-.theme-light .text-white       { color: #1e1b4b !important; }
-.theme-light .text-white\/90   { color: rgba(30,27,75,.9) !important; }
-.theme-light .text-white\/80   { color: rgba(30,27,75,.8) !important; }
-.theme-light .text-white\/70   { color: rgba(30,27,75,.7) !important; }
-.theme-light .text-white\/60   { color: rgba(30,27,75,.6) !important; }
-.theme-light .text-white\/50   { color: rgba(30,27,75,.5) !important; }
-.theme-light .text-white\/40   { color: rgba(30,27,75,.4) !important; }
-.theme-light .text-white\/35   { color: rgba(30,27,75,.35) !important; }
-.theme-light .text-white\/30   { color: rgba(30,27,75,.3) !important; }
-.theme-light .text-white\/25   { color: rgba(30,27,75,.25) !important; }
+/* Text overrides — Apple text color #1d1d1f
+   Opacity fractions are scaled up so muted text stays legible on a white surface.
+   Light surface contrast ratio: 29,29,31 @ full = ~16:1; @ .5 = ~3.5:1 (AA pass) */
+.theme-light .text-white       { color: #1d1d1f !important; }
+.theme-light .text-white\/90   { color: rgba(29,29,31,.90) !important; }
+.theme-light .text-white\/80   { color: rgba(29,29,31,.80) !important; }
+.theme-light .text-white\/70   { color: rgba(29,29,31,.72) !important; }
+.theme-light .text-white\/60   { color: rgba(29,29,31,.64) !important; }
+.theme-light .text-white\/50   { color: rgba(29,29,31,.58) !important; }
+.theme-light .text-white\/40   { color: rgba(29,29,31,.52) !important; }
+.theme-light .text-white\/35   { color: rgba(29,29,31,.48) !important; }
+.theme-light .text-white\/30   { color: rgba(29,29,31,.44) !important; }
+.theme-light .text-white\/25   { color: rgba(29,29,31,.38) !important; }
 
 /* Placeholder overrides */
-.theme-light .placeholder-white\/30::placeholder { color: rgba(30,27,75,.3) !important; }
-.theme-light .placeholder-white\/40::placeholder { color: rgba(30,27,75,.4) !important; }
+.theme-light .placeholder-white\/20::placeholder { color: rgba(29,29,31,.25) !important; }
+.theme-light .placeholder-white\/30::placeholder { color: rgba(29,29,31,.3) !important; }
+.theme-light .placeholder-white\/40::placeholder { color: rgba(29,29,31,.4) !important; }
 
 /* Border overrides */
-.theme-light .border-white\/10  { border-color: rgba(99,102,241,.1) !important; }
-.theme-light .border-white\/15  { border-color: rgba(99,102,241,.15) !important; }
-.theme-light .border-white\/20  { border-color: rgba(99,102,241,.2) !important; }
-.theme-light .border-white\/25  { border-color: rgba(99,102,241,.25) !important; }
-.theme-light .border-white\/30  { border-color: rgba(99,102,241,.3) !important; }
-.theme-light .border-white\/50  { border-color: rgba(99,102,241,.5) !important; }
+.theme-light .border-white\/10  { border-color: rgba(0,0,0,.07) !important; }
+.theme-light .border-white\/15  { border-color: rgba(0,0,0,.09) !important; }
+.theme-light .border-white\/20  { border-color: rgba(0,0,0,.11) !important; }
+.theme-light .border-white\/25  { border-color: rgba(0,0,0,.13) !important; }
+.theme-light .border-white\/30  { border-color: rgba(0,0,0,.16) !important; }
+.theme-light .border-white\/50  { border-color: rgba(0,0,0,.25) !important; }
 
 /* Background overrides */
-.theme-light .bg-white\/10 { background-color: rgba(240,242,255,.55) !important; }
-.theme-light .bg-white\/20 { background-color: rgba(230,232,255,.65) !important; }
-.theme-light .bg-white\/25 { background-color: rgba(220,224,255,.7) !important; }
-.theme-light .bg-white\/30 { background-color: rgba(210,215,255,.75) !important; }
-.theme-light .hover\:bg-white\/10:hover { background-color: rgba(240,242,255,.45) !important; }
-.theme-light .hover\:bg-white\/20:hover { background-color: rgba(230,232,255,.58) !important; }
-.theme-light .hover\:bg-white\/30:hover { background-color: rgba(220,224,255,.72) !important; }
+.theme-light .bg-white\/10 { background-color: rgba(0,0,0,.04) !important; }
+.theme-light .bg-white\/20 { background-color: rgba(0,0,0,.06) !important; }
+.theme-light .bg-white\/25 { background-color: rgba(0,0,0,.07) !important; }
+.theme-light .bg-white\/30 { background-color: rgba(0,0,0,.08) !important; }
+.theme-light .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,.04) !important; }
+.theme-light .hover\:bg-white\/20:hover { background-color: rgba(0,0,0,.06) !important; }
+.theme-light .hover\:bg-white\/30:hover { background-color: rgba(0,0,0,.08) !important; }
+
+/* Input fields in light mode */
+.theme-light input[type="text"],
+.theme-light input[type="password"],
+.theme-light input[type="number"],
+.theme-light textarea:not(.chat-textarea) {
+  color: #1d1d1f !important;
+  background-color: rgba(0,0,0,.04) !important;
+  border-color: rgba(0,0,0,.12) !important;
+}
+/* Chat textarea sits inside a white panel — keep it white, no border */
+.theme-light textarea.chat-textarea {
+  color: #1d1d1f !important;
+  background-color: #ffffff !important;
+  border-color: transparent !important;
+}
+.theme-light input::placeholder { color: rgba(29,29,31,.38) !important; }
+
+/* Glassmorphism slider — custom track + glowing thumb */
+.dsx-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+  border: none;
+  display: block;
+}
+
+.dsx-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+}
+
+.dsx-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1.5px solid rgba(34, 211, 238, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(34, 211, 238, 0.15),
+    0 0 10px 4px rgba(34, 211, 238, 0.5),
+    0 2px 4px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  margin-top: -7px;
+  transition: box-shadow 0.15s ease;
+}
+
+.dsx-slider:hover::-webkit-slider-thumb,
+.dsx-slider:focus::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 5px rgba(34, 211, 238, 0.2),
+    0 0 18px 6px rgba(34, 211, 238, 0.7),
+    0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.dsx-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 1.5px solid rgba(34, 211, 238, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(34, 211, 238, 0.15),
+    0 0 10px 4px rgba(34, 211, 238, 0.5);
+  cursor: pointer;
+}
+
+.dsx-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+}
+
+/* Light mode: Apple-blue glow */
+.theme-light .dsx-slider::-webkit-slider-thumb {
+  border-color: rgba(0, 113, 227, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(0, 113, 227, 0.12),
+    0 0 10px 4px rgba(0, 113, 227, 0.45),
+    0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.theme-light .dsx-slider:hover::-webkit-slider-thumb,
+.theme-light .dsx-slider:focus::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 5px rgba(0, 113, 227, 0.18),
+    0 0 18px 6px rgba(0, 113, 227, 0.65),
+    0 2px 4px rgba(0, 0, 0, 0.15);
+}
+
+.theme-light .dsx-slider::-moz-range-thumb {
+  border-color: rgba(0, 113, 227, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(0, 113, 227, 0.12),
+    0 0 10px 4px rgba(0, 113, 227, 0.45);
+}
+
+/* Custom select dropdown */
+.dsx-select-trigger {
+  appearance: none;
+}
+.theme-light .dsx-select-menu {
+  background: rgba(255,255,255,0.95) !important;
+  border-color: rgba(0,0,0,0.12) !important;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important;
+}
+.theme-light .dsx-select-item {
+  color: #1d1d1f !important;
+}
+.theme-light .dsx-select-item:hover,
+.theme-light .dsx-select-item.active {
+  background-color: rgba(0,122,255,0.1) !important;
+}
+.theme-light .dsx-select-item.selected {
+  background-color: rgba(0,122,255,0.12) !important;
+  color: #0071e3 !important;
+}
+
+/* Toggle in light mode */
+.theme-light .dsx-toggle-on  { background-color: #0071e3 !important; border-color: #0071e3 !important; }
+.theme-light .dsx-toggle-off { background-color: rgba(0,0,0,0.08) !important; border-color: rgba(0,0,0,0.15) !important; }
 
 /* Error styles stay red in light theme */
 .theme-light .text-red-300 { color: rgb(185,28,28) !important; }

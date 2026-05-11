@@ -1,13 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ASPECT_RATIOS, DEFAULT_RATIO } from '../config/aspectRatios.js'
+import { PROVIDERS as ALL_PROVIDERS } from '../config/features.js'
 import { supportsImageToImage } from '../hooks/useModels.js'
-
-const PROVIDERS = [
-  { value: 'huggingface', label: 'Hugging Face' },
-  { value: 'ollama',      label: 'Ollama' },
-  { value: 'lmstudio',    label: 'LM Studio' },
-  { value: 'llamacpp',    label: 'llama.cpp' },
-]
 
 // ── SVG icons ────────────────────────────────────────────────
 function PaperclipIcon() {
@@ -84,8 +78,13 @@ function ArrowUpIcon() {
 }
 
 // ── Compact toolbar dropdown ──────────────────────────────────
-function ToolbarSelect({ icon, value, onChange, options, placeholder, loading, color }) {
-  const textColor = color ?? 'rgba(255,255,255,0.65)'
+function ToolbarSelect({ icon, value, onChange, options, placeholder, loading, color, theme = 'dark' }) {
+  const isLight = theme === 'light'
+  const defaultColor = isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)'
+  const textColor = color
+    ? (isLight && color === '#22d3ee' ? '#0071e3' : color)
+    : defaultColor
+  const optionClass = isLight ? 'bg-white text-gray-900' : 'bg-gray-950 text-white'
   return (
     <label
       className="flex items-center gap-1 px-1.5 py-1 rounded-lg cursor-pointer transition-colors hover:bg-white/8 flex-shrink-0"
@@ -101,7 +100,7 @@ function ToolbarSelect({ icon, value, onChange, options, placeholder, loading, c
           title={value}
         >
           {options.map(o => (
-            <option key={o.value ?? o} value={o.value ?? o} className="bg-gray-950 text-white">
+            <option key={o.value ?? o} value={o.value ?? o} className={optionClass}>
               {o.label ?? (o.split('/').pop().slice(0, 22))}
             </option>
           ))}
@@ -128,6 +127,8 @@ export default function ChatInput({
   config, onConfigChange,
   imageModels = [], llmModels = [], loadingModels = false,
   modelCapabilities = [],
+  prefill = null,
+  theme = 'dark',
 }) {
   const [value, setValue] = useState('')
   const [ratio, setRatio] = useState(DEFAULT_RATIO)
@@ -136,6 +137,16 @@ export default function ChatInput({
   const [rewriteError, setRewriteError] = useState(null)
   const [listening, setListening] = useState(false)
   const [micError, setMicError] = useState(null)
+
+  // Populate textarea + reference image when the parent requests an edit
+  useEffect(() => {
+    if (!prefill) return
+    setValue(prefill.content ?? '')
+    setRefImage(prefill.referenceImageUrl
+      ? { dataUrl: prefill.referenceImageUrl, name: 'reference' }
+      : null
+    )
+  }, [prefill])
 
   const fileInputRef = useRef(null)
   const recognitionRef = useRef(null)
@@ -245,52 +256,67 @@ export default function ChatInput({
   // ── Config helpers ────────────────────────────────────────
   const cfg = (patch) => onConfigChange?.({ ...config, ...patch })
 
-  const providerOptions = PROVIDERS.map(p => ({ value: p.value, label: p.label }))
+  const providerOptions = ALL_PROVIDERS
+    .filter(p => p.defaultEnabled !== false)
+    .map(p => ({ value: p.value, label: p.label }))
   const imgModelOptions = imageModels.length > 0 ? imageModels : []
   const llmModelOptions = llmModels.length > 0 ? llmModels : []
   const ratioOptions = ASPECT_RATIOS.map(r => ({ value: r.value, label: r.label }))
   const dims = ASPECT_RATIOS.find(r => r.value === ratio)
   const modelSupportsI2I = supportsImageToImage(config?.model, modelCapabilities)
+  const isLight = theme === 'light'
 
   return (
-    <div className="px-4 py-4">
-      <div className="rounded-2xl border border-cyan-400/40 bg-[#060b18]/92 backdrop-blur-sm shadow-[0_0_28px_rgba(34,211,238,0.10)] overflow-hidden">
+    <div className="px-4 pb-4 pt-0">
+      <div
+        className="rounded-3xl backdrop-blur-sm overflow-hidden"
+        style={{
+          border: isLight ? '1px solid rgba(0,0,0,0.18)' : '1px solid rgba(255,255,255,0.12)',
+          background: isLight ? '#ffffff' : 'rgba(6,11,24,0.92)',
+          boxShadow: isLight ? '0 2px 10px rgba(0,0,0,0.07)' : '0 2px 16px rgba(0,0,0,0.4)',
+        }}
+      >
 
-        {/* Reference image thumbnail */}
-        {refImage && (
-          <div className="px-4 pt-3">
-            <div className="relative w-fit">
-              <img
-                src={refImage.dataUrl}
-                alt={refImage.name}
-                className="max-h-20 rounded-lg object-contain border border-white/20"
-              />
-              <button
-                onClick={() => setRefImage(null)}
-                title="Remove"
-                className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-black/70 text-white text-xs hover:bg-black/90"
-              >
-                ✕
-              </button>
+        {/* Typing area — flush with panel edges; panel's overflow-hidden + rounded-3xl clips corners */}
+        <div>
+
+          {/* Reference image thumbnail */}
+          {refImage && (
+            <div className="px-4 pt-3">
+              <div className="relative w-fit">
+                <img
+                  src={refImage.dataUrl}
+                  alt={refImage.name}
+                  className={`max-h-20 rounded-lg object-contain border ${isLight ? 'border-black/10' : 'border-white/20'}`}
+                />
+                <button
+                  onClick={() => setRefImage(null)}
+                  title="Remove"
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 flex items-center justify-center rounded-full bg-black/70 text-white text-xs hover:bg-black/90"
+                >
+                  ✕
+                </button>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* Textarea */}
-        <div className="px-4 pt-4 pb-2">
-          <textarea
-            className="w-full bg-transparent text-white placeholder-white/35 text-sm outline-none leading-relaxed resize-none"
-            style={{ minHeight: '48px', maxHeight: '200px' }}
-            placeholder="Describe an image…"
-            rows={2}
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            onKeyDown={onKeyDown}
-          />
+          {/* Textarea */}
+          <div className="px-4 pt-3 pb-2">
+            <textarea
+              className={`w-full text-sm outline-none leading-relaxed resize-none chat-textarea ${isLight ? 'bg-white text-gray-900 placeholder-gray-400' : 'bg-transparent text-white placeholder-white/35'}`}
+              style={{ minHeight: '48px', maxHeight: '200px' }}
+              placeholder="Describe an image…"
+              rows={2}
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              onKeyDown={onKeyDown}
+            />
+          </div>
+
         </div>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-0.5 px-3 pb-3 overflow-x-auto">
+        <div className="flex items-center gap-0.5 px-3 pt-2 pb-3 overflow-x-auto">
 
           {/* Attachment */}
           <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
@@ -298,7 +324,7 @@ export default function ChatInput({
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
             title={modelSupportsI2I ? 'Attach reference image (image-to-image)' : 'Attach reference image'}
-            className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${refImage ? 'text-cyan-400' : 'text-white/50 hover:text-white/80'}`}
+            className={`p-1.5 rounded-lg transition-colors flex-shrink-0 ${refImage ? (isLight ? 'text-blue-600' : 'text-cyan-400') : (isLight ? 'text-black/40 hover:text-black/70' : 'text-white/50 hover:text-white/80')}`}
           >
             <PaperclipIcon />
           </button>
@@ -309,15 +335,15 @@ export default function ChatInput({
             title={listening ? 'Stop recording' : 'Voice input'}
             className={`relative p-1.5 rounded-lg transition-colors flex-shrink-0 ${
               listening
-                ? 'text-cyan-400 animate-mic-pulse'
-                : 'text-white/50 hover:text-white/80'
+                ? (isLight ? 'text-blue-600 animate-mic-pulse' : 'text-cyan-400 animate-mic-pulse')
+                : (isLight ? 'text-black/40 hover:text-black/70' : 'text-white/50 hover:text-white/80')
             }`}
           >
             <MicIcon active={listening} />
           </button>
 
           {/* Divider */}
-          <div className="w-px h-4 bg-white/20 mx-1.5 flex-shrink-0" />
+          <div className={`w-px h-4 mx-1.5 flex-shrink-0 ${isLight ? 'bg-black/15' : 'bg-white/20'}`} />
 
           {/* Provider */}
           <ToolbarSelect
@@ -326,6 +352,7 @@ export default function ChatInput({
             onChange={v => cfg({ provider: v })}
             options={providerOptions}
             color="#22d3ee"
+            theme={theme}
           />
 
           {/* Image model + i2i capability badge */}
@@ -337,11 +364,12 @@ export default function ChatInput({
               options={imgModelOptions}
               placeholder="img model"
               loading={loadingModels}
+              theme={theme}
             />
             {modelSupportsI2I && (
               <span
                 title="This model supports image-to-image (attach a reference image)"
-                className="text-[9px] font-semibold px-1 py-0.5 rounded bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 leading-none flex-shrink-0"
+                className={`text-[9px] font-semibold px-1 py-0.5 rounded leading-none flex-shrink-0 ${isLight ? 'bg-blue-500/15 text-blue-600 border border-blue-500/25' : 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'}`}
               >
                 i2i
               </span>
@@ -356,6 +384,7 @@ export default function ChatInput({
             options={llmModelOptions}
             placeholder="llm model"
             loading={loadingModels}
+            theme={theme}
           />
 
           {/* Aspect ratio */}
@@ -364,27 +393,34 @@ export default function ChatInput({
             value={ratio}
             onChange={setRatio}
             options={ratioOptions}
+            theme={theme}
           />
 
           {/* Spacer */}
           <div className="flex-1 min-w-[8px]" />
 
           {/* Enhance — static ring path + orbiting dot only while rewriting */}
-          <div
-            className={`enhance-btn-wrap transition-opacity ${
-              !value.trim() || loading ? 'opacity-35' : 'opacity-100'
-            }`}
-          >
-            {rewriting && <div className="enhance-orbit" />}
-            <button
-              onClick={rewrite}
-              disabled={!value.trim() || loading || rewriting}
-              title="Enhance prompt with AI"
-              className="absolute inset-0 flex items-center justify-center rounded-full bg-[#060b18] text-white/60 hover:text-white/95 transition-colors disabled:cursor-not-allowed z-10"
-            >
-              <span className={rewriting ? 'animate-twinkle' : ''}>✨</span>
-            </button>
-          </div>
+          {(() => {
+            const noLlm = llmModels.length === 0 || !config?.llmModel
+            const enhanceDisabled = !value.trim() || loading || rewriting || noLlm
+            return (
+              <div
+                className={`enhance-btn-wrap transition-opacity ${
+                  enhanceDisabled ? 'opacity-35' : 'opacity-100'
+                }`}
+              >
+                {rewriting && <div className="enhance-orbit" />}
+                <button
+                  onClick={rewrite}
+                  disabled={enhanceDisabled}
+                  title={noLlm ? 'No LLM model loaded — load one in LM Studio first' : 'Enhance prompt with AI'}
+                  className={`absolute inset-0 flex items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed z-10 ${isLight ? 'bg-white text-black/50 hover:text-black/80' : 'bg-[#060b18] text-white/60 hover:text-white/95'}`}
+                >
+                  <span className={rewriting ? 'animate-twinkle' : ''}>✨</span>
+                </button>
+              </div>
+            )
+          })()}
 
           {/* Send / Stop */}
           {loading ? (
@@ -413,9 +449,9 @@ export default function ChatInput({
         <p className="text-red-400 text-xs mt-1.5 px-1">{rewriteError ?? micError}</p>
       )}
       {listening && (
-        <p className="text-cyan-400/80 text-xs text-center mt-1.5 animate-pulse">Listening… speak now</p>
+        <p className={`text-xs text-center mt-1.5 animate-pulse ${isLight ? 'text-blue-600/80' : 'text-cyan-400/80'}`}>Listening… speak now</p>
       )}
-      <p className="text-white/22 text-xs text-center mt-1">
+      <p className={`text-xs text-center mt-1 ${isLight ? 'text-black/28' : 'text-white/22'}`}>
         Enter to send · Shift+Enter for new line · {dims?.width}×{dims?.height}px
       </p>
     </div>

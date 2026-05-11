@@ -1,0 +1,38 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Diffusion Studio X",
+  "version": "0.1.0",
+  "identifier": "com.diffusionstudio.x",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev:tauri",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* tauri: ipc: http://ipc.localhost; img-src 'self' data: blob: asset: https://asset.localhost http://127.0.0.1:*; font-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "externalBin": [
+      "binaries/bridge",
+      "binaries/hf-image-server/hf-image-server"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "infoPlist": "Info.plist"
+    }
+  }
+}
