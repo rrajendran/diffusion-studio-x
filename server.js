@@ -3,7 +3,7 @@ import cors from 'cors'
 import http from 'node:http'
 import { spawn } from 'child_process'
 import { existsSync } from 'fs'
-import { writeFile, readFile, unlink, mkdir, readdir, stat as statFile } from 'fs/promises'
+import { writeFile, readFile, unlink, mkdir, readdir, stat as statFile, rename as renameFile, copyFile } from 'fs/promises'
 import { tmpdir, homedir } from 'os'
 import { join } from 'path'
 import { fileURLToPath } from 'url'
@@ -18,7 +18,7 @@ const _scriptDir = (typeof __dirname !== 'undefined' && __dirname !== '')
 
 // In a pkg-packaged binary __dirname is a virtual /snapshot path — use env var or app support dir
 const _isSnapshot = _scriptDir.startsWith('/snapshot')
-const OUTPUT_DIR = process.env.OUTPUT_DIR
+let OUTPUT_DIR = process.env.OUTPUT_DIR
   ?? (_isSnapshot
       ? join(process.env.HOME ?? tmpdir(), 'Library', 'Application Support', 'com.diffusionstudio.x', 'output')
       : join(_scriptDir, 'output'))
@@ -73,8 +73,8 @@ app.use(cors({
 }))
 app.use(express.json({ limit: '50mb' }))
 
-// Serve output folder as static files
-app.use('/output', express.static(OUTPUT_DIR))
+// Serve output folder as static files — use closure so changes to OUTPUT_DIR are picked up
+app.use('/output', (req, res, next) => express.static(OUTPUT_DIR)(req, res, next))
 
 // PNG and JPEG magic bytes
 const PNG_MAGIC  = Buffer.from([0x89, 0x50, 0x4e, 0x47])
@@ -91,9 +91,17 @@ function detectMime(buf) {
 const IMAGE_SERVER_PORT = process.env.IMAGE_SERVER_PORT ?? 8001
 const DEFAULT_HF_BASE   = (process.env.HF_BASE_URL ?? `http://127.0.0.1:${IMAGE_SERVER_PORT}`).replace(/\/$/, '')
 
+// LM Studio image server (port 8002) — serves GGUF/MLX models from ~/.lmstudio/models
+const LMS_IMAGE_SERVER_PORT = process.env.LMS_IMAGE_SERVER_PORT ?? 8002
+const DEFAULT_LMS_BASE      = `http://127.0.0.1:${LMS_IMAGE_SERVER_PORT}`
+
 // Resolve HF hf-image-server base URL from request body, query param, or env/default
 function getHfBase(req) {
   return (req.body?.hfBaseUrl || req.query?.hfBaseUrl || DEFAULT_HF_BASE).replace(/\/$/, '')
+}
+
+function getLmsBase() {
+  return DEFAULT_LMS_BASE
 }
 // Resolve Ollama base URL from request body or env/default
 function getOllamaBase(req) {
@@ -203,10 +211,10 @@ app.post('/api/image/preload', async (req, res) => {
 app.post('/api/image/generate', async (req, res) => {
   const hfBase = getHfBase(req)
   try { await waitForHf(hfBase) } catch (e) { return res.status(503).json({ error: `Image server not ready: ${e.message}` }) }
-  let { prompt = '', model = '', width, height, reference_image } = req.body
+  let { prompt = '', model = '', width, height, reference_image, num_frames, fps } = req.body
   const mode = reference_image ? 'i2i' : 't2i'
   const reqId = Date.now()
-  console.log(`[image:${reqId}] → generate | model=${model} ${width}x${height} mode=${mode} prompt="${prompt.slice(0, 60)}"`)
+  console.log(`[image:${reqId}] → generate | model=${model} ${width}x${height} mode=${mode} frames=${num_frames ?? '-'} prompt="${prompt.slice(0, 60)}"`)
 
   // Convert a saved /output/<file> web path back to a base64 data URL so the
   // Python server can decode it.  This happens when lastImageUrl (from a prior
@@ -223,11 +231,15 @@ app.post('/api/image/generate', async (req, res) => {
     }
   }
 
-  // Image generation can take several minutes for large models.
-  // Default timeout = 21 min (just over the Python 20-min INFERENCE_TIMEOUT so the
-  // Python 504 always reaches the client before the bridge itself aborts).
-  // Override with IMAGE_GEN_TIMEOUT_MS env var.
-  const GEN_TIMEOUT_MS = parseInt(process.env.IMAGE_GEN_TIMEOUT_MS ?? '1260000', 10)
+  // Generation timeout. Video (Wan2.2-14B, cpu_offload) can take 25+ min on MPS
+  // due to 14B weight I/O per step; Python uses 60 min for video, 20 min for images.
+  // We use 62 min here so the Python 504 always arrives before the bridge itself aborts.
+  // Override with IMAGE_GEN_TIMEOUT_MS (images) or VIDEO_GEN_TIMEOUT_MS (video).
+  const isVideoModel = String(model).toLowerCase().includes('wan')
+  const DEFAULT_MS = isVideoModel
+    ? parseInt(process.env.VIDEO_GEN_TIMEOUT_MS ?? '3720000', 10)   // 62 min
+    : parseInt(process.env.IMAGE_GEN_TIMEOUT_MS ?? '1260000', 10)   // 21 min
+  const GEN_TIMEOUT_MS = DEFAULT_MS
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), GEN_TIMEOUT_MS)
 
@@ -285,45 +297,200 @@ app.use('/api/hf', async (req, res) => {
   }
 })
 
+// ── LM Studio image server proxy (port 8002, lms-image-server) ────────────────
+// Image generation, load, and unload are handled by the local lms-image-server
+// Python process which loads GGUF/MLX models from ~/.lmstudio/models directly.
+
+// Resolve a relative model key (e.g. "z-image-turbo") to an absolute GGUF/MLX
+// path by querying lms-image-server's /models endpoint.  LM Studio's app API
+// does not expose an image-generation endpoint, so all image gen must go
+// through lms-image-server with a real file path.
+async function resolveModelPath(relativeKey) {
+  const lmsBase = getLmsBase()
+  try {
+    const r = await fetch(`${lmsBase}/models`)
+    if (!r.ok) return null
+    const models = await r.json()
+    const lower = relativeKey.toLowerCase()
+    const match = models.find(
+      m => m.source === 'local' && (
+        m.key === relativeKey ||
+        m.relative_key === relativeKey ||
+        m.key.toLowerCase().includes(lower) ||
+        (m.display_name || '').toLowerCase().includes(lower)
+      )
+    )
+    return match?.key ?? null
+  } catch {
+    return null
+  }
+}
+
 app.post('/api/lmstudio/generate', async (req, res) => {
-  const { prompt, model, width = 512, height = 512, referenceImageUrl = null } = req.body
+  const { prompt, model, width = 1024, height = 1024, referenceImageUrl = null, lmstudioBaseUrl } = req.body
   if (!prompt) return res.status(400).json({ error: 'prompt is required' })
 
-  const messages = referenceImageUrl
-    ? [{ role: 'user', content: [
-        { type: 'image_url', image_url: { url: referenceImageUrl } },
-        { type: 'text', text: prompt },
-      ] }]
-    : [{ role: 'user', content: prompt }]
+  // Absolute paths go directly to lms-image-server.
+  // Relative keys (e.g. "z-image-turbo" from LM Studio's model list) must be
+  // resolved to an absolute GGUF/MLX path first, because LM Studio's own API
+  // does not support image generation (/v1/images/generations is not implemented).
+  const isLocalModel = model && model.startsWith('/')
+  const effectiveModel = isLocalModel ? model : (await resolveModelPath(model))
 
+  if (!effectiveModel) {
+    // Could not resolve — lms-image-server is not running or model not found
+    console.error(`[lms/generate] cannot resolve model "${model}" — is lms-image-server running?`)
+    return res.status(503).json({
+      error: `Cannot find model "${model}". Make sure lms-image-server is running and the model file exists in ~/.lmstudio/models.`,
+    })
+  }
+
+  // Local GGUF/MLX model → lms-image-server
+  const lmsBase = getLmsBase()
   try {
-    const lmRes = await fetch('http://localhost:1234/v1/images/generations', {
+    const lmsRes = await fetch(`${lmsBase}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: model || 'default', prompt, messages, n: 1, size: `${width}x${height}` }),
+      body: JSON.stringify({ prompt, model: effectiveModel, width, height, reference_image: referenceImageUrl }),
     })
-
-    if (!lmRes.ok) {
-      const errText = await lmRes.text()
-      console.error(`[LMStudio] error ${lmRes.status}:`, errText.slice(0, 300))
-      return res.status(lmRes.status).json({ error: errText })
+    if (!lmsRes.ok) {
+      const errText = await lmsRes.text()
+      console.error(`[lms-image] error ${lmsRes.status}:`, errText.slice(0, 300))
+      return res.status(lmsRes.status).json({ error: errText })
     }
+    const data = await lmsRes.json()
+    if (!data.imageUrl) return res.status(500).json({ error: 'lms-image-server returned no imageUrl' })
 
-    const data = await lmRes.json()
-    const raw = data.data?.[0]?.url || data.data?.[0]?.b64_json
-    if (!raw) return res.status(500).json({ error: 'LM Studio returned no image data' })
-
-    // If it's already a URL, pass through; otherwise save base64 to output dir
-    if (raw.startsWith('http')) return res.json({ imageUrl: raw })
-
-    const b64 = raw.startsWith('data:') ? raw.split(',')[1] : raw
-    const filename = `lmstudio-${Date.now()}.png`
-    const outPath = join(OUTPUT_DIR, filename)
-    await writeFile(outPath, Buffer.from(b64, 'base64'))
-    res.json({ imageUrl: `/output/${filename}` })
+    if (data.imageUrl.startsWith('data:')) {
+      const b64 = data.imageUrl.split(',')[1]
+      const filename = `lmstudio-${Date.now()}.png`
+      await writeFile(join(OUTPUT_DIR, filename), Buffer.from(b64, 'base64'))
+      return res.json({ imageUrl: `/output/${filename}`, meta: data.meta })
+    }
+    res.json({ imageUrl: data.imageUrl, meta: data.meta })
   } catch (err) {
-    console.error('[LMStudio] fetch error:', err.message)
-    res.status(502).json({ error: `LM Studio bridge error: ${err.message}` })
+    console.error('[lms-image] fetch error:', err.message)
+    res.status(502).json({ error: `lms-image-server error: ${err.message}` })
+  }
+})
+
+// Load an image model: local GGUF/MLX → lms-image-server; LM Studio app model → LM Studio API
+app.post('/api/lmstudio/load', async (req, res) => {
+  const { model, lmstudioBaseUrl } = req.body
+  if (!model) return res.status(400).json({ error: 'model is required' })
+
+  const isLocalModel = model.startsWith('/')
+
+  if (!isLocalModel) {
+    const base = (lmstudioBaseUrl || 'http://localhost:1234').replace(/\/$/, '')
+    try {
+      const r = await fetch(`${base}/api/v1/models/load`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      const text = await r.text()
+      return res.status(r.status).set('Content-Type', 'application/json').send(text)
+    } catch (err) {
+      return res.status(502).json({ error: `LM Studio app error: ${err.message}` })
+    }
+  }
+
+  const lmsBase = getLmsBase()
+  try {
+    const r = await fetch(`${lmsBase}/preload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+    })
+    const text = await r.text()
+    res.status(r.status).set('Content-Type', 'application/json').send(text)
+  } catch {
+    res.status(503).json({ error: 'lms-image-server not running' })
+  }
+})
+
+// Unload the current image model from the lms-image-server
+app.post('/api/lmstudio/unload', async (req, res) => {
+  const lmsBase = getLmsBase()
+  try {
+    const r = await fetch(`${lmsBase}/unload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    const text = await r.text()
+    res.status(r.status).set('Content-Type', 'application/json').send(text)
+  } catch {
+    res.status(503).json({ error: 'lms-image-server not running' })
+  }
+})
+
+// ── LM Studio app API — LLM load/unload (for enhance/chat models) ─────────────
+function getLmStudioAppBase(req) {
+  return (req.body?.lmstudioBaseUrl || 'http://localhost:1234').replace(/\/$/, '')
+}
+
+app.post('/api/lmstudio/llm/load', async (req, res) => {
+  const { model, lmstudioBaseUrl } = req.body
+  if (!model) return res.status(400).json({ error: 'model is required' })
+  const base = getLmStudioAppBase(req)
+  try {
+    const r = await fetch(`${base}/api/v1/models/load`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, echo_load_config: true }),
+    })
+    const text = await r.text()
+    res.status(r.status).set('Content-Type', 'application/json').send(text)
+  } catch (err) {
+    console.error('[lmstudio/llm/load]', err.message)
+    res.status(502).json({ error: err.message })
+  }
+})
+
+app.post('/api/lmstudio/llm/unload', async (req, res) => {
+  const { instance_id } = req.body
+  if (!instance_id) return res.status(400).json({ error: 'instance_id is required' })
+  const base = getLmStudioAppBase(req)
+  try {
+    const r = await fetch(`${base}/api/v1/models/unload`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instance_id }),
+    })
+    const text = await r.text()
+    res.status(r.status).set('Content-Type', 'application/json').send(text)
+  } catch (err) {
+    console.error('[lmstudio/llm/unload]', err.message)
+    res.status(502).json({ error: err.message })
+  }
+})
+
+// List models from lms-image-server (GGUF/MLX local) + LM Studio app API.
+// Returns [] gracefully when lms-image-server is not running.
+app.get('/api/lmstudio/models', async (req, res) => {
+  const lmsBase = getLmsBase()
+  try {
+    const r = await fetch(`${lmsBase}/models`)
+    if (r.ok) return res.json(await r.json())
+    // lms-image-server returned an error status — still return empty array
+    res.json([])
+  } catch {
+    // lms-image-server not running yet — not an error, just return empty
+    res.json([])
+  }
+})
+
+// Health / currently-loaded model
+app.get('/api/lmstudio/health', async (req, res) => {
+  const lmsBase = getLmsBase()
+  try {
+    const r = await fetch(`${lmsBase}/health`)
+    if (!r.ok) return res.status(r.status).json({ status: 'unavailable', model: null })
+    res.json(await r.json())
+  } catch {
+    res.json({ status: 'unavailable', model: null })
   }
 })
 
@@ -500,39 +667,90 @@ function promptFromFilename(filename) {
 
 app.get('/api/gallery', async (req, res) => {
   try {
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit ?? '50', 10)))
+    const page  = Math.max(1, parseInt(req.query.page ?? '1', 10))
+    const offset = (page - 1) * limit
     const files = await readdir(OUTPUT_DIR)
-    const imageFiles = files.filter(f => /\.(png|jpe?g|webp)$/i.test(f))
+    const mediaFiles = files.filter(f => /\.(png|jpe?g|webp|mp4)$/i.test(f))
     const items = await Promise.all(
-      imageFiles.map(async (filename) => {
+      mediaFiles.map(async (filename) => {
         const s = await statFile(join(OUTPUT_DIR, filename))
         return {
           filename,
           url: `/output/${filename}`,
           prompt: promptFromFilename(filename),
           timestamp: s.mtime.getTime(),
+          type: /\.mp4$/i.test(filename) ? 'video' : 'image',
         }
       })
     )
     items.sort((a, b) => b.timestamp - a.timestamp)
-    res.json(items)
+    res.json(items.slice(offset, offset + limit))
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+app.post('/api/gallery/delete', async (req, res) => {
+  const { filenames } = req.body
+  if (!Array.isArray(filenames)) return res.status(400).json({ error: 'filenames array required' })
+  const results = await Promise.allSettled(
+    filenames.map(f => unlink(join(OUTPUT_DIR, f)))
+  )
+  const deleted = results.filter(r => r.status === 'fulfilled').length
+  const errors  = results.filter(r => r.status === 'rejected').length
+  res.json({ deleted, errors })
+})
+
+app.post('/api/move-output-dir', async (req, res) => {
+  const { newPath } = req.body
+  if (!newPath || typeof newPath !== 'string') return res.status(400).json({ error: 'newPath required' })
+  try {
+    await mkdir(newPath, { recursive: true })
+    const files = await readdir(OUTPUT_DIR)
+    const images = files.filter(f => /\.(png|jpe?g|webp|mp4)$/i.test(f))
+    let moved = 0
+    for (const f of images) {
+      try {
+        await renameFile(join(OUTPUT_DIR, f), join(newPath, f))
+        moved++
+      } catch {
+        // cross-device: fall back to copy+delete
+        try {
+          await copyFile(join(OUTPUT_DIR, f), join(newPath, f))
+          await unlink(join(OUTPUT_DIR, f))
+          moved++
+        } catch { /* skip individual failures */ }
+      }
+    }
+    OUTPUT_DIR = newPath
+    res.json({ success: true, moved })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
 })
 
 app.post('/api/save-image', async (req, res) => {
-  const { imageUrl, prompt = '' } = req.body
-  if (!imageUrl?.startsWith('data:')) return res.status(400).json({ error: 'Expected a data: URL' })
+  const { imageUrl, videoUrl, prompt = '' } = req.body
+  const dataUrl = videoUrl || imageUrl
+  if (!dataUrl?.startsWith('data:')) return res.status(400).json({ error: 'Expected a data: URL' })
 
-  const mime = imageUrl.match(/^data:([^;]+);base64,/)?.[1] ?? 'image/png'
-  const ext = mime === 'image/jpeg' ? 'jpg' : 'png'
+  const mime = dataUrl.match(/^data:([^;]+);base64,/)?.[1] ?? 'image/png'
+  let ext
+  if (mime === 'video/mp4') ext = 'mp4'
+  else if (mime === 'image/jpeg') ext = 'jpg'
+  else ext = 'png'
+
   const slug = prompt.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60)
   const filename = `${slug}-${Date.now()}.${ext}`
-  const b64 = imageUrl.split(',')[1]
+  const b64 = dataUrl.split(',')[1]
   const outPath = join(OUTPUT_DIR, filename)
   await writeFile(outPath, Buffer.from(b64, 'base64'))
   console.log(`[save-image] saved → output/${filename}`)
-  res.json({ imageUrl: `/output/${filename}` })
+  // Return the appropriate URL key based on type
+  const savedPath = `/output/${filename}`
+  if (videoUrl) res.json({ videoUrl: savedPath })
+  else res.json({ imageUrl: savedPath })
 })
 
 const PORT = process.env.BRIDGE_PORT ?? process.env.PORT ?? 3001

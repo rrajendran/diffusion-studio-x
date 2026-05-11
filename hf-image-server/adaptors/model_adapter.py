@@ -17,6 +17,8 @@ class ModelAdapter(abc.ABC):
 
     Subclasses may implement:
       image_to_image() — required when supports_i2i = True
+      text_to_video()  — required when is_video = True; returns list[PIL.Image]
+      image_to_video() — required when is_video = True and supports_i2i = True
 
     Class-level attributes set sensible per-family defaults for steps/guidance.
     """
@@ -24,6 +26,7 @@ class ModelAdapter(abc.ABC):
     default_steps: int = 4
     default_guidance: float = 0.0
     supports_i2i: bool = False
+    is_video: bool = False
 
     @classmethod
     @abc.abstractmethod
@@ -45,9 +48,16 @@ class ModelAdapter(abc.ABC):
     def image_to_image(self, pipes: tuple, req, ref_img: PILImage.Image) -> PILImage.Image:
         raise ValueError(f"Model family does not support image-to-image: {req.model}")
 
+    def text_to_video(self, pipes: tuple, req) -> list:
+        raise NotImplementedError(f"Model family does not support text-to-video: {req.model}")
+
+    def image_to_video(self, pipes: tuple, req, ref_img: PILImage.Image) -> list:
+        raise ValueError(f"Model family does not support image-to-video: {req.model}")
+
     def capabilities(self) -> dict:
         return {
             "supports_i2i": self.supports_i2i,
+            "is_video": self.is_video,
             "default_steps": self.default_steps,
             "default_guidance": self.default_guidance,
         }

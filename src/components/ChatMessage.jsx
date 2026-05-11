@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ImageResult from './ImageResult.jsx'
+import VideoResult from './VideoResult.jsx'
 
 export default function ChatMessage({ message, onImageClick, onEdit }) {
   const isUser = message.role === 'user'
@@ -24,6 +25,9 @@ export default function ChatMessage({ message, onImageClick, onEdit }) {
     setTimeout(() => setImgCopied(false), 1500)
   }
 
+  const hasVideo = !!message.videoUrl
+  const hasImage = !!message.imageUrl
+
   return (
     <div className={`group flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
       <div
@@ -44,8 +48,12 @@ export default function ChatMessage({ message, onImageClick, onEdit }) {
         )}
         <p className={message.error ? 'text-red-300' : ''}>{message.content}</p>
 
-        {message.imageUrl && (
-          <ImageResult imageUrl={message.imageUrl} prompt={message.imagePrompt ?? message.content} meta={message.meta} onExpand={onImageClick} />
+        {hasVideo && (
+          <VideoResult videoUrl={message.videoUrl} prompt={message.imagePrompt ?? message.content} meta={message.meta} onExpand={onImageClick} />
+        )}
+
+        {hasImage && (
+          <ImageResult imageUrl={message.imageUrl} prompt={message.imagePrompt ?? message.content} meta={message.meta} onExpand={(url, p, m) => onImageClick?.(url, p, m, 'image')} />
         )}
 
         {message.meta && (
@@ -55,6 +63,7 @@ export default function ChatMessage({ message, onImageClick, onEdit }) {
             {message.meta.steps != null && <span title="Steps">steps {message.meta.steps}</span>}
             {message.meta.width && message.meta.height && <span title="Resolution">{message.meta.width}×{message.meta.height}</span>}
             {message.meta.guidance_scale != null && <span title="Guidance scale">cfg {message.meta.guidance_scale}</span>}
+            {message.meta.num_frames != null && <span title="Frames">{message.meta.num_frames}f @ {message.meta.fps}fps</span>}
           </div>
         )}
         {message.imagePrompt && (
@@ -82,7 +91,7 @@ export default function ChatMessage({ message, onImageClick, onEdit }) {
             >
               {textCopied ? '✓ copied' : '⎘ text'}
             </button>
-            {message.imageUrl && (
+            {hasImage && (
               <button
                 onClick={copyImage}
                 title="Copy image"

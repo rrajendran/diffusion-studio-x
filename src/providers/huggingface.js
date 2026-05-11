@@ -2,12 +2,14 @@ import { BRIDGE } from '../lib/ports.js'
 const BASE_URL = BRIDGE
 
 export async function generate(prompt, model, _apiKey, lastImageUrl, signal = null, referenceImageUrl = null, genParams = {}) {
-  const { width = 512, height = 512, inferenceSteps, guidanceScale, seed, hfBaseUrl } = genParams
+  const { width = 512, height = 512, inferenceSteps, guidanceScale, seed, hfBaseUrl, numFrames, fps } = genParams
   const body = { prompt, model, width, height }
   if (hfBaseUrl) body.hfBaseUrl = hfBaseUrl
   if (inferenceSteps != null) body.num_inference_steps = inferenceSteps
   if (guidanceScale  != null) body.guidance_scale = guidanceScale
   if (seed           != null) body.seed = seed
+  if (numFrames      != null) body.num_frames = numFrames
+  if (fps            != null) body.fps = fps
   const refImage = referenceImageUrl || lastImageUrl
   const mode = refImage ? (referenceImageUrl ? 'i2i(attached)' : 'i2i(lastImg)') : 't2i'
   if (refImage) body.reference_image = refImage
@@ -29,8 +31,8 @@ export async function generate(prompt, model, _apiKey, lastImageUrl, signal = nu
     console.error(`[huggingface] error | status=${res.status} elapsed=${elapsed}s error="${data.error ?? res.statusText}"`)
     throw new Error(`Image server error: ${res.status} — ${data.error ?? res.statusText}`)
   }
-  if (!data.imageUrl) throw new Error('Image server: no image in response')
+  if (!data.imageUrl && !data.videoUrl) throw new Error('Image server: no media in response')
 
   console.log(`[huggingface] success | mode=${data.mode ?? mode} elapsed=${data.elapsed ?? elapsed}s seed=${data.meta?.seed ?? '?'}`)
-  return { imageUrl: data.imageUrl, meta: data.meta ?? null }
+  return { imageUrl: data.imageUrl ?? null, videoUrl: data.videoUrl ?? null, meta: data.meta ?? null }
 }

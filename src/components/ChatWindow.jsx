@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import ChatMessage from './ChatMessage.jsx'
 import { BRIDGE } from '../lib/ports.js'
 
-export default function ChatWindow({ messages, loading, onImageClick, onEdit }) {
+export default function ChatWindow({ messages, loading, onImageClick, onEdit, theme = 'dark' }) {
   const bottomRef = useRef(null)
   const [progress, setProgress] = useState({ step: 0, total: 0 })
   const pollRef = useRef(null)
@@ -47,7 +47,7 @@ export default function ChatWindow({ messages, loading, onImageClick, onEdit }) 
               {[0, 1, 2].map(i => (
                 <span
                   key={i}
-                  className="w-1.5 h-1.5 bg-white/60 rounded-full animate-bounce"
+                  className={`w-1.5 h-1.5 rounded-full animate-bounce ${theme === 'light' ? 'bg-black/40' : 'bg-white/60'}`}
                   style={{ animationDelay: `${i * 0.15}s` }}
                 />
               ))}

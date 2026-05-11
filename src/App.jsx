@@ -11,6 +11,8 @@ import Lightbox from './components/Lightbox.jsx'
 import { useChat } from './hooks/useChat.js'
 import { useModels } from './hooks/useModels.js'
 import { loadConfig, saveConfig } from './store/chatStore.js'
+import { FlagsProvider } from 'react-feature-flags'
+import { getFeatureFlags } from './lib/featureFlags.js'
 import { BRIDGE, LMSTUDIO, OLLAMA } from './lib/ports.js'
 
 const PROVIDER_DEFAULTS = {
@@ -34,6 +36,12 @@ export default function App() {
       guidanceScale:   saved.guidanceScale   ?? 0.0,
       hfBaseUrl:       saved.hfBaseUrl       ?? '',
       ollamaBaseUrl:   saved.ollamaBaseUrl   ?? '',
+      lmstudioBaseUrl: saved.lmstudioBaseUrl ?? '',
+      llamacppBaseUrl: saved.llamacppBaseUrl ?? '',
+      maxGalleryItems: saved.maxGalleryItems ?? 100,
+      outputPath:      saved.outputPath      ?? '',
+      numFrames:       saved.numFrames       ?? 17,
+      fps:             saved.fps             ?? 16,
     }
   })
 
@@ -63,12 +71,35 @@ export default function App() {
     }
   }, [llmModels]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, sendMessage, stopGeneration } = useChat(config)
-  const [preview, setPreview] = useState(null)   // { imageUrl, prompt, meta? } | null
-  const [editPrefill, setEditPrefill] = useState(null)  // message to prefill ChatInput for editing
+  const { chats, activeChatId, activeChat, loading, setActiveChatId, createChat, deleteChat, renameChat, sendMessage, stopGeneration } = useChat(config)
+  const [preview, setPreview] = useState(null)
+  const [editPrefill, setEditPrefill] = useState(null)
   const [theme, setTheme] = useState(() => localStorage.getItem('img-gen-theme') ?? 'dark')
   const [showSettings, setShowSettings] = useState(false)
   const [showGallery, setShowGallery] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
+  const [sidebarWidth, setSidebarWidth] = useState(() => parseInt(localStorage.getItem('sidebar-width') ?? '256', 10))
+
+  const startResize = useCallback((e) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = sidebarWidth
+    function onMove(ev) {
+      const newW = Math.min(400, Math.max(160, startW + ev.clientX - startX))
+      setSidebarWidth(newW)
+    }
+    function onUp() {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      setSidebarWidth(w => { localStorage.setItem('sidebar-width', String(w)); return w })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [sidebarWidth])
+
+  const toggleCollapse = useCallback(() => {
+    setSidebarCollapsed(c => { const next = !c; localStorage.setItem('sidebar-collapsed', String(next)); return next })
+  }, [])
 
   // Listen for native menu "Preferences" event emitted by Tauri Rust backend
   useEffect(() => {
@@ -104,48 +135,79 @@ export default function App() {
     })
   }, [])
 
-  const handleImageClick = useCallback((imageUrl, prompt, meta) => setPreview({ imageUrl, prompt, meta: meta ?? null }), [])
+  const handleImageClick = useCallback((mediaUrl, prompt, meta, type) => {
+    if (type === 'video') {
+      setPreview({ videoUrl: mediaUrl, prompt, meta: meta ?? null, type: 'video' })
+    } else {
+      setPreview({ imageUrl: mediaUrl, prompt, meta: meta ?? null, type: 'image' })
+    }
+  }, [])
 
   const handleRewrite = useCallback(async (text) => {
+    const isHuggingFace = config.provider === 'huggingface'
+    const isLmStudio    = config.provider === 'lmstudio'
+
+    if (isLmStudio && (llmModels.length === 0 || !config.llmModel || !llmModels.includes(config.llmModel))) {
+      throw new Error('No LLM model selected — pick a text LLM in the toolbar or load one in LM Studio')
+    }
+
     const systemPrompt = `You are an expert prompt engineer for an image generation model.
 Revise the following text into a highly descriptive, detailed prompt suitable for a text-to-image model.
 Respond with ONLY the new prompt string, without any conversational filler or quotes.`
 
-    const isHuggingFace = config.provider === 'huggingface'
-    const isLmStudio = config.provider === 'lmstudio'
     const ollamaBase = (config.ollamaBaseUrl || OLLAMA).replace(/\/$/, '')
-    const url = isHuggingFace
-      ? `${BRIDGE}/api/hf/v1/chat/completions`
-      : isLmStudio
-        ? `${LMSTUDIO}/v1/chat/completions`
-        : `${ollamaBase}/api/chat`
+    const lmBase     = (config.lmstudioBaseUrl || LMSTUDIO).replace(/\/$/, '')
 
-    const messages = (isHuggingFace || isLmStudio)
-      ? [{ role: 'user', content: `${systemPrompt}\n\n${text}` }]
-      : [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }]
+    let content
 
-    const llmRes = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: config.llmModel || (isHuggingFace || isLmStudio ? 'default' : 'llama3'),
-        messages,
-        max_tokens: 512,
-        stream: false,
-      }),
-    })
-
-    if (!llmRes.ok) {
-      const errText = await llmRes.text()
-      throw new Error(`Enhance failed (${llmRes.status}): ${errText.slice(0, 200)}`)
+    if (isLmStudio) {
+      // LM Studio new REST API — POST /api/v1/chat
+      const llmRes = await fetch(`${lmBase}/api/v1/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model:             config.llmModel,
+          system_prompt:     systemPrompt,
+          input:             text,
+          max_output_tokens: 512,
+          stream:            false,
+        }),
+      })
+      if (!llmRes.ok) {
+        const errText = await llmRes.text()
+        throw new Error(`Enhance failed (${llmRes.status}): ${errText.slice(0, 200)}`)
+      }
+      const data = await llmRes.json()
+      // output is an array of message objects: [{ role, content }]
+      const item = data.output?.[0]
+      content = typeof item?.content === 'string' ? item.content : item?.content?.[0]?.text
+    } else {
+      // OpenAI-compatible chat completions (HuggingFace bridge, Ollama)
+      const url = isHuggingFace ? `${BRIDGE}/api/hf/v1/chat/completions` : `${ollamaBase}/api/chat`
+      const messages = isHuggingFace
+        ? [{ role: 'user', content: `${systemPrompt}\n\n${text}` }]
+        : [{ role: 'system', content: systemPrompt }, { role: 'user', content: text }]
+      const llmRes = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model:      config.llmModel || (isHuggingFace ? 'default' : 'llama3'),
+          messages,
+          max_tokens: 512,
+          stream:     false,
+        }),
+      })
+      if (!llmRes.ok) {
+        const errText = await llmRes.text()
+        throw new Error(`Enhance failed (${llmRes.status}): ${errText.slice(0, 200)}`)
+      }
+      const raw = await llmRes.text()
+      const lastLine = raw.trim().split('\n').filter(l => l.startsWith('data:') ? (l = l.slice(5).trim()) : l).at(-1) ?? raw
+      let llmData
+      try { llmData = JSON.parse(lastLine) } catch { llmData = JSON.parse(raw) }
+      content = llmData.message?.content ?? llmData.choices?.[0]?.message?.content
     }
 
-    const raw = await llmRes.text()
-    const lastLine = raw.trim().split('\n').filter(l => l.startsWith('data:') ? (l = l.slice(5).trim()) : l).at(-1) ?? raw
-    let llmData
-    try { llmData = JSON.parse(lastLine) } catch { llmData = JSON.parse(raw) }
-
-    const content = llmData.message?.content ?? llmData.choices?.[0]?.message?.content
     if (!content) throw new Error('Enhance: no content in response')
 
     try {
@@ -155,13 +217,14 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
     } catch { /* not JSON — use as-is */ }
 
     return content.trim()
-  }, [config.provider, config.llmModel])
+  }, [config.provider, config.llmModel, config.ollamaBaseUrl, config.lmstudioBaseUrl, llmModels])
 
   const bgClass = theme === 'dark'
     ? 'dsx-bg-dark'
     : 'dsx-bg-light'
 
   return (
+    <FlagsProvider value={getFeatureFlags()}>
     <ToastProvider>
     <div className={`theme-${theme} h-screen ${bgClass} flex overflow-hidden`}>
       <Sidebar
@@ -170,11 +233,23 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
         onSelectChat={id => { setActiveChatId(id); setShowSettings(false); setShowGallery(false) }}
         onNewChat={() => { createChat(); setShowSettings(false); setShowGallery(false) }}
         onDeleteChat={deleteChat}
+        onRenameChat={renameChat}
         showSettings={showSettings}
-        onToggleSettings={() => { setShowSettings(s => !s); setShowGallery(false) }}
+        onToggleSettings={() => { setShowSettings(true); setShowGallery(false) }}
         showGallery={showGallery}
-        onToggleGallery={() => { setShowGallery(g => !g); setShowSettings(false) }}
+        onToggleGallery={() => { setShowGallery(true); setShowSettings(false) }}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleCollapse}
+        sidebarWidth={sidebarWidth}
       />
+
+      {/* Drag handle for sidebar resize */}
+      {!sidebarCollapsed && (
+        <div
+          className="w-1 cursor-col-resize hover:bg-white/20 flex-shrink-0 select-none transition-colors"
+          onMouseDown={startResize}
+        />
+      )}
 
       <div className="flex-1 flex overflow-hidden">
         <main className="flex-1 flex flex-col m-3 ml-0 glass overflow-hidden">
@@ -206,6 +281,8 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
           ) : showGallery ? (
             <GalleryPage
               chats={chats}
+              maxGalleryItems={config.maxGalleryItems}
+              theme={theme}
               onNavigateChat={(chatId) => {
                 setActiveChatId(chatId)
                 setShowGallery(false)
@@ -213,7 +290,7 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
             />
           ) : activeChat ? (
             <>
-              <ChatWindow messages={activeChat.messages} loading={loading} onImageClick={handleImageClick} onEdit={setEditPrefill} />
+              <ChatWindow messages={activeChat.messages} loading={loading} onImageClick={handleImageClick} onEdit={setEditPrefill} theme={theme} />
               <ChatInput
                 onSend={(prompt, ratio, refImg) => { setEditPrefill(null); sendMessage(prompt, ratio, refImg) }}
                 loading={loading}
@@ -226,6 +303,7 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
                 loadingModels={loadingModels}
                 modelCapabilities={modelCapabilities}
                 prefill={editPrefill}
+                theme={theme}
               />
             </>
           ) : (
@@ -245,13 +323,15 @@ Respond with ONLY the new prompt string, without any conversational filler or qu
       {/* Lightbox — rendered as portal over everything */}
       {preview && (
         <Lightbox
-          images={[{ imageUrl: preview.imageUrl, prompt: preview.prompt, meta: preview.meta }]}
+          images={[{ imageUrl: preview.imageUrl, videoUrl: preview.videoUrl, type: preview.type, prompt: preview.prompt, meta: preview.meta }]}
           index={0}
           onIndex={() => {}}
           onClose={() => setPreview(null)}
+          theme={theme}
         />
       )}
     </div>
     </ToastProvider>
+    </FlagsProvider>
   )
 }

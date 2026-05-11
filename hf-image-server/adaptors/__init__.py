@@ -9,11 +9,20 @@ from .utils import (
     _effective_guidance,
     _decode_image,
     _encode_image,
+    _encode_video,
     _progress,
 )
 from .model_adapter import ModelAdapter
 from .glm_image_adapter import GLMImageAdapter
 from .qwen_image_adapter import QwenImageAdapter
+from .flux_adapter import FluxAdapter
+from .flux_klein_adapter import FluxKleinAdapter
+from .flux_klein_kv_adapter import FluxKleinKVAdapter
+from .flux_kontext_adapter import FluxKontextAdapter
+from .zimage_adapter import ZImageAdapter
+from .ernie_image_adapter import ErnieImageAdapter
+from .sd3_adapter import SD3Adapter
+from .wan_adapter import WanAdapter
 from .diffusion_adapter import DiffusionAdapter
 
 
@@ -21,7 +30,15 @@ from .diffusion_adapter import DiffusionAdapter
 _REGISTRY: list[ModelAdapter] = [
     GLMImageAdapter(),
     QwenImageAdapter(),
-    DiffusionAdapter(),  # catch-all — must be last
+    FluxKleinKVAdapter(),    # most specific — before FluxKleinAdapter
+    FluxKleinAdapter(),
+    FluxKontextAdapter(),    # before generic FluxAdapter
+    FluxAdapter(),
+    SD3Adapter(),
+    ZImageAdapter(),
+    ErnieImageAdapter(),
+    WanAdapter(),            # video models — before DiffusionAdapter catch-all
+    DiffusionAdapter(),      # catch-all — must be last
 ]
 
 
@@ -39,10 +56,19 @@ __all__ = [
     "_effective_guidance",
     "_decode_image",
     "_encode_image",
+    "_encode_video",
     "_progress",
     "ModelAdapter",
     "GLMImageAdapter",
     "QwenImageAdapter",
+    "FluxAdapter",
+    "FluxKleinAdapter",
+    "FluxKleinKVAdapter",
+    "FluxKontextAdapter",
+    "ZImageAdapter",
+    "ErnieImageAdapter",
+    "SD3Adapter",
+    "WanAdapter",
     "DiffusionAdapter",
     "get_adapter",
 ]

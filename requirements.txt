@@ -8,3 +8,5 @@ uvicorn>=0.30.0
 pillow>=10.0.0
 pydantic>=2.0.0
 xformers; sys_platform == "linux"
+mflux>=0.4.0; sys_platform == "darwin"
+imageio[ffmpeg]>=2.34.0

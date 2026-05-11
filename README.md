@@ -29,9 +29,16 @@ Browser / Tauri WebView
     ├── Express bridge server  (port 3001)  — image saving, Ollama proxy
     │
     └── Python image server   (port 8001)  — local diffusion inference
-            ├── GLMImageAdapter   (zai-org/GLM-Image)
-            ├── QwenImageAdapter  (Qwen/Qwen-Image-*)
-            └── DiffusionAdapter  (generic diffusers fallback)
+            ├── GLMImageAdapter       (zai-org/GLM-Image)
+            ├── QwenImageAdapter      (Qwen/Qwen-Image-*)
+            ├── FluxKleinKVAdapter    (FLUX.2-klein-9b-kv)
+            ├── FluxKleinAdapter      (FLUX.2-klein-9B)
+            ├── FluxKontextAdapter    (FLUX.1-Kontext-dev)
+            ├── FluxAdapter           (FLUX.1-schnell, FLUX.1-dev)
+            ├── SD3Adapter            (stable-diffusion-3.5-large)
+            ├── ZImageAdapter         (Tongyi-MAI/Z-Image-Turbo)
+            ├── ErnieImageAdapter     (baidu/ERNIE-Image, baidu/ERNIE-Image-Turbo)
+            └── DiffusionAdapter      (generic diffusers fallback)
 ```
 
 ### Provider endpoints
@@ -61,6 +68,26 @@ Browser / Tauri WebView
 | Python | 3.13 | For local image server |
 | Rust + Cargo | stable | Only for Tauri desktop build |
 | PyTorch | ≥ 2.3.0 | MPS (Apple Silicon), CUDA, or CPU |
+
+---
+
+## Supported models (local Python server)
+
+| Adapter | Model ID(s) | Pipeline | Steps | Guidance | i2i | License |
+|---------|-------------|----------|-------|----------|-----|---------|
+| `GLMImageAdapter` | `zai-org/GLM-Image` | `GLMImagePipeline` | 50 | 5.0 | ✅ | Apache-2.0 |
+| `QwenImageAdapter` | `Qwen/Qwen-Image-Edit-2511` | `QwenImagePipeline` | 8 | 0.0 | ✅ | Apache-2.0 |
+| `FluxKleinKVAdapter` | `FLUX.2-klein-9b-kv` | `Flux2KleinKVPipeline` | 4 | 1.0 | ✅ | — |
+| `FluxKleinAdapter` | `FLUX.2-klein-9B` | `Flux2KleinPipeline` | 4 | 1.0 | ✅ | — |
+| `FluxKontextAdapter` | `black-forest-labs/FLUX.1-Kontext-dev` | `FluxKontextPipeline` | 28 | 2.5 | ✅ | BFLA |
+| `FluxAdapter` | `black-forest-labs/FLUX.1-schnell`, `.../FLUX.1-dev` | `FluxPipeline` | 4 / 20 | 0.0 / 3.5 | ❌ | Apache / BFLA |
+| `SD3Adapter` | `stabilityai/stable-diffusion-3.5-large` | `StableDiffusion3Pipeline` | 28 | 3.5 | ❌ | Stability Community |
+| `ZImageAdapter` | `Tongyi-MAI/Z-Image-Turbo` | `ZImagePipeline` | 9 | 0.0 | ❌ | Apache-2.0 |
+| `ErnieImageAdapter` | `baidu/ERNIE-Image`, `baidu/ERNIE-Image-Turbo` | `ErnieImagePipeline` | 50 / 8 | 4.0 / 1.0 | ❌ | Apache-2.0 |
+| `DiffusionAdapter` | any `diffusers`-compatible model | `StableDiffusionXLPipeline` | 30 | 7.5 | ✅ | varies |
+
+> All local models run via the Python image server (`hf-image-server/`) on port 8001.  
+> Large models use `enable_model_cpu_offload()` — first load may take several minutes.
 
 ---
 

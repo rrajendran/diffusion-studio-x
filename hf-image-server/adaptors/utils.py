@@ -87,6 +87,55 @@ def _encode_image(img: PILImage.Image) -> str:
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
+def _encode_video(frames: list, fps: int = 16) -> str:
+    """Encode a list of PIL Images or numpy arrays to a base64 MP4 data URL using OpenCV."""
+    import cv2
+    import numpy as np
+    import tempfile, os
+
+    def _to_rgb_array(frame):
+        if isinstance(frame, np.ndarray):
+            arr = frame
+            if arr.dtype != np.uint8:
+                arr = (arr * 255).clip(0, 255).astype(np.uint8)
+            if arr.ndim == 2:
+                arr = np.stack([arr] * 3, axis=-1)
+            elif arr.shape[-1] == 4:
+                arr = arr[..., :3]
+            return arr
+        return np.array(frame.convert("RGB"))
+
+    first = _to_rgb_array(frames[0])
+    h, w = first.shape[:2]
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        # Try H.264 first (avc1); fall back to MPEG-4 Part 2 (mp4v)
+        for fourcc_tag in ("avc1", "mp4v"):
+            fourcc = cv2.VideoWriter_fourcc(*fourcc_tag)
+            writer = cv2.VideoWriter(tmp_path, fourcc, float(fps), (w, h))
+            if writer.isOpened():
+                break
+            writer.release()
+
+        if not writer.isOpened():
+            raise RuntimeError("cv2.VideoWriter could not open any codec — avc1 and mp4v both failed")
+
+        for frame in frames:
+            arr = _to_rgb_array(frame)
+            writer.write(cv2.cvtColor(arr, cv2.COLOR_RGB2BGR))
+        writer.release()
+
+        with open(tmp_path, "rb") as f:
+            video_bytes = f.read()
+    finally:
+        os.unlink(tmp_path)
+
+    return f"data:video/mp4;base64,{base64.b64encode(video_bytes).decode()}"
+
+
 # ── Step-level progress tracking ──────────────────────────────────────────────
 # Written by _step_callback (inference thread), read by GET /progress (any thread).
 # CPython's GIL makes plain dict writes/reads atomic enough for this use-case.

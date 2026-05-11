@@ -17,10 +17,19 @@ from adaptors import (
     _effective_guidance,
     _decode_image,
     _encode_image,
+    _encode_video,
     _progress,
     get_adapter,
     GLMImageAdapter,
     QwenImageAdapter,
+    FluxAdapter,
+    FluxKleinAdapter,
+    FluxKleinKVAdapter,
+    FluxKontextAdapter,
+    ZImageAdapter,
+    ErnieImageAdapter,
+    SD3Adapter,
+    WanAdapter,
     DiffusionAdapter,
 )
 from domain import (
@@ -61,9 +70,17 @@ def cached_models():
 @app.get("/model-capabilities")
 def model_capabilities():
     return [
-        {"family": "GLM-Image",  "pattern": "GLM-Image", **GLMImageAdapter().capabilities()},
-        {"family": "Qwen-Image", "pattern": "Qwen.*Image", **QwenImageAdapter().capabilities()},
-        {"family": "Diffusion",  "pattern": "stable-diffusion-xl*", **DiffusionAdapter().capabilities()},
+        {"family": "GLM-Image",  "pattern": "GLM-Image",             **GLMImageAdapter().capabilities()},
+        {"family": "Qwen-Image", "pattern": "Qwen.*Image",           **QwenImageAdapter().capabilities()},
+        {"family": "FLUX",       "pattern": "FLUX\\.1-(schnell|dev)", **FluxAdapter().capabilities()},
+        {"family": "FLUX-Klein",   "pattern": "FLUX\\.2-klein(?!.*kv)", **FluxKleinAdapter().capabilities()},
+        {"family": "FLUX-Klein-KV", "pattern": "FLUX\\.2-klein.*kv",       **FluxKleinKVAdapter().capabilities()},
+        {"family": "FLUX-Kontext", "pattern": "FLUX\.1-Kontext",            **FluxKontextAdapter().capabilities()},
+        {"family": "Z-Image",    "pattern": "Z-Image",                  **ZImageAdapter().capabilities()},
+        {"family": "ERNIE-Image", "pattern": "ERNIE-Image",              **ErnieImageAdapter().capabilities()},
+        {"family": "SD3",        "pattern": "stable-diffusion-3",        **SD3Adapter().capabilities()},
+        {"family": "Wan-Video",  "pattern": "Wan-AI/Wan",               **WanAdapter().capabilities()},
+        {"family": "Diffusion",  "pattern": "stable-diffusion-xl*",      **DiffusionAdapter().capabilities()},
     ]
 
 
@@ -127,13 +144,17 @@ def generate(req: GenerateRequest):
         f"[gen:{req_id}]   load {'(cached)' if cache_hit else '(cold)'} {_ms(t_load)}", flush=True)
 
     _progress.update({"step": 0, "total": effective_steps})
-    mode = "t2i"
+    is_video = adapter.is_video
+    mode = "t2v" if is_video else "t2i"
 
-    # Server-side inference timeout (default 20 min, override via INFERENCE_TIMEOUT env).
-    # Qwen/GLM on MPS need ~10 min (LLM AR pass + diffusion steps); 1200s gives headroom.
-    # The thread keeps running (MPS can't be interrupted), but the HTTP response is
-    # returned with 504 so the client isn't left hanging indefinitely.
-    _INFERENCE_TIMEOUT = int(os.environ.get("INFERENCE_TIMEOUT", "1200"))
+    # Server-side inference timeout. Video generation (Wan2.2-14B + cpu_offload on MPS)
+    # runs ~2-5 min/step due to 14B weight I/O; 5 steps can take 10-25 min total.
+    # Default: 60 min for video, 20 min for images. Override via VIDEO_INFERENCE_TIMEOUT
+    # / INFERENCE_TIMEOUT env vars.
+    if is_video:
+        _INFERENCE_TIMEOUT = int(os.environ.get("VIDEO_INFERENCE_TIMEOUT", "3600"))
+    else:
+        _INFERENCE_TIMEOUT = int(os.environ.get("INFERENCE_TIMEOUT", "1200"))
 
     t_lock = time.time()
     with service.get_inference_lock():
@@ -144,28 +165,36 @@ def generate(req: GenerateRequest):
                 with torch.inference_mode():
                     if req.reference_image:
                         if adapter.supports_i2i:
-                            mode = "i2i"
+                            mode = "i2v" if is_video else "i2i"
                             t_dec = time.time()
                             ref_img = _decode_image(req.reference_image)
                             print(
                                 f"[gen:{req_id}]   decode ref {_ms(t_dec)} | size={ref_img.size}", flush=True)
                             t_inf = time.time()
-                            result = adapter.image_to_image(
-                                pipes, req, ref_img)
+                            if is_video:
+                                result = adapter.image_to_video(pipes, req, ref_img)
+                            else:
+                                result = adapter.image_to_image(pipes, req, ref_img)
                             print(
-                                f"[gen:{req_id}]   i2i inference {_ms(t_inf)}", flush=True)
+                                f"[gen:{req_id}]   {mode} inference {_ms(t_inf)}", flush=True)
                         else:
                             print(
                                 f"[gen:{req_id}]   no i2i support → t2i fallback", flush=True)
                             t_inf = time.time()
-                            result = adapter.text_to_image(pipes, req)
+                            if is_video:
+                                result = adapter.text_to_video(pipes, req)
+                            else:
+                                result = adapter.text_to_image(pipes, req)
                             print(
                                 f"[gen:{req_id}]   t2i inference {_ms(t_inf)}", flush=True)
                     else:
                         t_inf = time.time()
-                        result = adapter.text_to_image(pipes, req)
+                        if is_video:
+                            result = adapter.text_to_video(pipes, req)
+                        else:
+                            result = adapter.text_to_image(pipes, req)
                         print(
-                            f"[gen:{req_id}]   t2i inference {_ms(t_inf)}", flush=True)
+                            f"[gen:{req_id}]   {'t2v' if is_video else 't2i'} inference {_ms(t_inf)}", flush=True)
                 return result
 
             # Do NOT use `with ThreadPoolExecutor(...) as _ex:` — its __exit__
@@ -177,7 +206,7 @@ def generate(req: GenerateRequest):
             future = _ex.submit(_run_inference)
             _ex.shutdown(wait=False)  # detach — thread runs to completion in bg
             try:
-                image = future.result(timeout=_INFERENCE_TIMEOUT)
+                media = future.result(timeout=_INFERENCE_TIMEOUT)
             except concurrent.futures.TimeoutError:
                 print(
                     f"[gen:{req_id}] ✗ inference timeout after {_INFERENCE_TIMEOUT}s", flush=True)
@@ -193,25 +222,38 @@ def generate(req: GenerateRequest):
                 status_code=500, detail=f"Inference error ({mode}): {e}")
 
     t_enc = time.time()
-    image_url = _encode_image(image)
-    print(f"[gen:{req_id}]   encode {_ms(t_enc)} | size={image.size}", flush=True)
-
-    elapsed = round(time.time() - t_req, 2)
-    print(
-        f"[gen:{req_id}] ✓ done | mode={mode} total={elapsed}s seed={req.seed}", flush=True)
-    return {
-        "imageUrl": image_url,
-        "mode": mode,
-        "elapsed": elapsed,
-        "meta": {
-            "model": req.model,
-            "seed": req.seed,
-            "steps": effective_steps,
-            "width": req.width,
-            "height": req.height,
-            "guidance_scale": round(_effective_guidance(req.guidance_scale, adapter.default_guidance), 2),
-        },
+    meta = {
+        "model": req.model,
+        "seed": req.seed,
+        "steps": effective_steps,
+        "width": req.width,
+        "height": req.height,
+        "guidance_scale": round(_effective_guidance(req.guidance_scale, adapter.default_guidance), 2),
     }
+    elapsed = round(time.time() - t_req, 2)
+
+    if is_video:
+        meta["num_frames"] = req.num_frames
+        meta["fps"] = req.fps
+        video_url = _encode_video(media, req.fps)
+        print(f"[gen:{req_id}]   encode video {_ms(t_enc)} | frames={len(media)}", flush=True)
+        print(f"[gen:{req_id}] ✓ done | mode={mode} total={elapsed}s seed={req.seed}", flush=True)
+        return {
+            "videoUrl": video_url,
+            "mode": mode,
+            "elapsed": elapsed,
+            "meta": meta,
+        }
+    else:
+        image_url = _encode_image(media)
+        print(f"[gen:{req_id}]   encode {_ms(t_enc)} | size={media.size}", flush=True)
+        print(f"[gen:{req_id}] ✓ done | mode={mode} total={elapsed}s seed={req.seed}", flush=True)
+        return {
+            "imageUrl": image_url,
+            "mode": mode,
+            "elapsed": elapsed,
+            "meta": meta,
+        }
 
 
 @app.post("/v1/chat/completions")

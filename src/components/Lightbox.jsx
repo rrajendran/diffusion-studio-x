@@ -6,15 +6,19 @@ import { useToast } from './Toast.jsx'
  * Full-screen lightbox / carousel.
  *
  * Props:
- *   images   – array of { imageUrl, prompt, meta? }
+ *   images   – array of { imageUrl?, videoUrl?, type?, prompt, meta? }
  *   index    – currently shown index
  *   onIndex  – (newIndex) => void
  *   onClose  – () => void
  */
-export default function Lightbox({ images, index, onIndex, onClose }) {
+export default function Lightbox({ images, index, onIndex, onClose, theme = 'dark' }) {
   const total = images.length
   const item  = images[index] ?? images[0]
   const showToast = useToast()
+  const isLight = theme === 'light'
+
+  const mediaUrl = item.videoUrl || item.imageUrl
+  const isVideo = item.type === 'video' || !!item.videoUrl
 
   const prev = useCallback(() => onIndex((index - 1 + total) % total), [index, total, onIndex])
   const next = useCallback(() => onIndex((index + 1) % total), [index, total, onIndex])
@@ -38,9 +42,9 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
 
   const download = async () => {
     try {
-      const res = await fetch(item.imageUrl)
+      const res = await fetch(mediaUrl)
       const blob = await res.blob()
-      const ext = blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png'
+      const ext = isVideo ? 'mp4' : (blob.type === 'image/jpeg' ? 'jpg' : blob.type === 'image/webp' ? 'webp' : 'png')
       const filename = `generated-${Date.now()}.${ext}`
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -50,8 +54,7 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
       URL.revokeObjectURL(url)
       showToast?.(`Saved to Downloads: ${filename}`, { type: 'success' })
     } catch {
-      // fallback: open in new tab
-      window.open(item.imageUrl, '_blank')
+      window.open(mediaUrl, '_blank')
       showToast?.('Could not download — opened in new tab', { type: 'error' })
     }
   }
@@ -59,28 +62,36 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
   const meta = item.meta
 
   return createPortal(
+    <div className={`theme-${theme}`}>
     <div
       className="fixed inset-0 z-50 flex flex-col"
-      style={{ background: 'rgba(7,5,18,0.96)', backdropFilter: 'blur(20px)' }}
+      style={{
+        background: isLight ? 'rgba(245,245,247,0.96)' : 'rgba(7,5,18,0.96)',
+        backdropFilter: 'blur(20px)',
+      }}
       onClick={onClose}
     >
       {/* Top bar */}
       <div
         className="flex items-center justify-between px-5 py-3 flex-shrink-0"
-        style={{ background: 'rgba(255,255,255,0.04)', borderBottom: '1px solid rgba(255,255,255,0.08)' }}
+        style={{
+          background: isLight ? 'rgba(0,0,0,0.04)' : 'rgba(255,255,255,0.04)',
+          borderBottom: isLight ? '1px solid rgba(0,0,0,0.08)' : '1px solid rgba(255,255,255,0.08)',
+        }}
         onClick={e => e.stopPropagation()}
       >
-        <span className="text-white/40 text-xs tabular-nums">
+        <span className="text-xs tabular-nums" style={{ color: isLight ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.45)' }}>
           {index + 1} / {total}
         </span>
 
         {meta && (
-          <div className="flex items-center gap-3 text-white/35 text-xs font-mono">
+          <div className="flex items-center gap-3 text-xs font-mono" style={{ color: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(255,255,255,0.38)' }}>
             {meta.model && <span>{meta.model.split('/').pop()}</span>}
             {meta.seed != null && <span>seed {meta.seed}</span>}
             {meta.steps != null && <span>{meta.steps} steps</span>}
             {meta.width && meta.height && <span>{meta.width}×{meta.height}</span>}
             {meta.guidance_scale != null && <span>cfg {meta.guidance_scale}</span>}
+            {meta.num_frames != null && <span>{meta.num_frames}f @ {meta.fps}fps</span>}
           </div>
         )}
 
@@ -101,7 +112,7 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
         </div>
       </div>
 
-      {/* Image area */}
+      {/* Media area */}
       <div
         className="flex-1 flex items-center justify-center relative min-h-0 px-16 overflow-auto"
         onClick={e => e.stopPropagation()}
@@ -117,13 +128,25 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
           </button>
         )}
 
-        <img
-          key={item.imageUrl}
-          src={item.imageUrl}
-          alt={item.prompt ?? ''}
-          className="block rounded-xl shadow-2xl select-none"
-          draggable={false}
-        />
+        {isVideo ? (
+          <video
+            key={mediaUrl}
+            src={mediaUrl}
+            controls
+            autoPlay
+            loop
+            playsInline
+            className="block rounded-xl shadow-2xl max-h-full max-w-full select-none"
+          />
+        ) : (
+          <img
+            key={mediaUrl}
+            src={mediaUrl}
+            alt={item.prompt ?? ''}
+            className="block rounded-xl shadow-2xl select-none"
+            draggable={false}
+          />
+        )}
 
         {/* Next button */}
         {total > 1 && (
@@ -140,9 +163,12 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
       {/* Caption */}
       {item.prompt && (
         <div
-          className="flex-shrink-0 text-center px-8 py-3 text-white/45 text-xs leading-relaxed"
+          className="flex-shrink-0 text-center px-8 py-3 text-xs leading-relaxed"
           onClick={e => e.stopPropagation()}
-          style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}
+          style={{
+            borderTop: isLight ? '1px solid rgba(0,0,0,0.06)' : '1px solid rgba(255,255,255,0.06)',
+            color: isLight ? 'rgba(0,0,0,0.65)' : 'rgba(255,255,255,0.55)',
+          }}
         >
           {item.imagePrompt ?? item.prompt}
         </div>
@@ -158,15 +184,19 @@ export default function Lightbox({ images, index, onIndex, onClose }) {
             <button
               key={i}
               onClick={() => onIndex(i)}
-              className={`rounded-full transition-all ${
-                i === index
-                  ? 'w-4 h-1.5 bg-white/70'
-                  : 'w-1.5 h-1.5 bg-white/25 hover:bg-white/50'
-              }`}
+              className="rounded-full transition-all"
+              style={{
+                width:  i === index ? '16px' : '6px',
+                height: '6px',
+                background: i === index
+                  ? (isLight ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.75)')
+                  : (isLight ? 'rgba(0,0,0,0.2)'  : 'rgba(255,255,255,0.28)'),
+              }}
             />
           ))}
         </div>
       )}
+    </div>
     </div>,
     document.body
   )
