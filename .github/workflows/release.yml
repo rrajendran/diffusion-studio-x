@@ -20,62 +20,72 @@ concurrency:
 
 jobs:
   release:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.platform }})
     strategy:
       fail-fast: false
       matrix:
         include:
 
           # ── macOS Apple Silicon ──────────────────────────────────────────────
-          - os: macos-latest        # GitHub-hosted arm64 runner (M1/M2)
+          - os: macos-latest
             target: aarch64-apple-darwin
             pkg_target: node20-macos-arm64
-            bundle_ext: dmg
             platform: mac
 
           # ── macOS Intel ─────────────────────────────────────────────────────
-          - os: macos-13            # GitHub-hosted x86_64 runner
+          - os: macos-13
             target: x86_64-apple-darwin
             pkg_target: node20-macos-x64
-            bundle_ext: dmg
             platform: mac
 
           # ── Linux x86_64 ────────────────────────────────────────────────────
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             pkg_target: node20-linux-x64
-            bundle_ext: AppImage
             platform: linux
 
           # ── Windows x86_64 ──────────────────────────────────────────────────
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             pkg_target: node20-win-x64
-            bundle_ext: msi
             platform: windows
 
     runs-on: ${{ matrix.os }}
-    # Skip job when a platform filter is specified and this platform isn't in it.
-    # On tag push (no filter input) always run all platforms.
-    if: |
-      github.event_name == 'push' ||
-      inputs.platforms == 'all' ||
-      contains(inputs.platforms, matrix.platform)
 
     steps:
+      # ── 0. Platform filter ───────────────────────────────────────────────────
+      # Allows workflow_dispatch to target specific platforms (e.g. "linux,windows").
+      # On tag push the input is empty so all platforms run.
+      - name: Check platform filter
+        id: filter
+        shell: bash
+        run: |
+          FILTER="${{ inputs.platforms }}"
+          PLATFORM="${{ matrix.platform }}"
+          if [[ -n "$FILTER" && "$FILTER" != "all" && "$FILTER" != *"$PLATFORM"* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       # ── 1. Checkout ──────────────────────────────────────────────────────────
       - uses: actions/checkout@v4
+        if: steps.filter.outputs.skip != 'true'
 
       # ── 2. Node ──────────────────────────────────────────────────────────────
       - uses: actions/setup-node@v4
+        if: steps.filter.outputs.skip != 'true'
         with:
           node-version: '20'
           cache: npm
 
-      - run: npm ci
+      - name: Install npm deps
+        if: steps.filter.outputs.skip != 'true'
+        run: npm ci
 
       # ── 3. Build Node bridge binary ──────────────────────────────────────────
       - name: Build Node bridge
+        if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: |
           npx esbuild server.js \
@@ -87,40 +97,40 @@ jobs:
             --output src-tauri/binaries/bridge-${{ matrix.target }}
           rm server.bundle.cjs
 
-      # ── 4. Python ─────────────────────────────────────────────────────────────
+      # ── 4. Python ────────────────────────────────────────────────────────────
       - uses: actions/setup-python@v5
+        if: steps.filter.outputs.skip != 'true'
         with:
           python-version: '3.11'
           cache: pip
 
-      # Install Linux system libs needed by cv2 / Tauri webkit
       - name: Linux system deps
-        if: runner.os == 'Linux'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
             libglib2.0-dev libgl1-mesa-glx libglib2.0-0
 
-      - name: Install Python build deps
+      - name: Install Python build tools
+        if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: pip install uv pyinstaller
 
-      # Platform-specific torch index (CPU-only on Linux/Windows; MPS included in Mac wheel)
-      - name: Install torch (Mac)
-        if: runner.os == 'macOS'
+      - name: Install torch (Mac — includes MPS)
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'macOS'
         shell: bash
         run: uv pip install --system torch torchvision
 
-      - name: Install torch (Linux / Windows — CPU only, smaller download)
-        if: runner.os != 'macOS'
+      - name: Install torch (Linux / Windows — CPU-only)
+        if: steps.filter.outputs.skip != 'true' && runner.os != 'macOS'
         shell: bash
         run: |
-          uv pip install --system \
-            torch torchvision \
+          uv pip install --system torch torchvision \
             --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install remaining Python dependencies
+        if: steps.filter.outputs.skip != 'true'
         shell: bash
         run: |
           uv pip install --system \
@@ -137,9 +147,9 @@ jobs:
             sentencepiece \
             tokenizers
 
-      # ── 5. Build Python server with PyInstaller ───────────────────────────────
+      # ── 5. Build hf-image-server with PyInstaller ────────────────────────────
       - name: Build hf-image-server (Unix)
-        if: runner.os != 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os != 'Windows'
         shell: bash
         run: |
           cd hf-image-server
@@ -147,7 +157,6 @@ jobs:
             --onedir \
             --name hf-image-server \
             --distpath ../src-tauri/binaries \
-            --paths ../venv/lib/python3.11/site-packages \
             --add-data "routes.py:." \
             --add-data "services.py:." \
             --add-data "adaptors:adaptors" \
@@ -177,12 +186,11 @@ jobs:
             --copy-metadata regex \
             --copy-metadata numpy \
             --noconfirm
-          # Rename executable to include target triple (required by Tauri externalBin)
           mv ../src-tauri/binaries/hf-image-server/hf-image-server \
              ../src-tauri/binaries/hf-image-server/hf-image-server-${{ matrix.target }}
 
       - name: Build hf-image-server (Windows)
-        if: runner.os == 'Windows'
+        if: steps.filter.outputs.skip != 'true' && runner.os == 'Windows'
         shell: bash
         run: |
           cd hf-image-server
@@ -224,15 +232,18 @@ jobs:
 
       # ── 6. Rust toolchain ─────────────────────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.filter.outputs.skip != 'true'
         with:
           targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.filter.outputs.skip != 'true'
         with:
           workspaces: src-tauri
 
-      # ── 7. Build Tauri app + create / update GitHub release ───────────────────
+      # ── 7. Tauri build + upload to GitHub release ────────────────────────────
       - uses: tauri-apps/tauri-action@v0
+        if: steps.filter.outputs.skip != 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
