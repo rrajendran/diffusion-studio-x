@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.1.0)'
+        required: true
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          # ── macOS Apple Silicon ──────────────────────────────────────────────
+          - os: macos-latest        # GitHub-hosted arm64 runner (M1/M2)
+            target: aarch64-apple-darwin
+            pkg_target: node20-macos-arm64
+            bundle_ext: dmg
+
+          # ── macOS Intel ─────────────────────────────────────────────────────
+          - os: macos-13            # GitHub-hosted x86_64 runner
+            target: x86_64-apple-darwin
+            pkg_target: node20-macos-x64
+            bundle_ext: dmg
+
+          # ── Linux x86_64 ────────────────────────────────────────────────────
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            pkg_target: node20-linux-x64
+            bundle_ext: AppImage
+
+          # ── Windows x86_64 ──────────────────────────────────────────────────
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            pkg_target: node20-win-x64
+            bundle_ext: msi
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────────
+      - uses: actions/checkout@v4
+
+      # ── 2. Node ──────────────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      # ── 3. Build Node bridge binary ──────────────────────────────────────────
+      - name: Build Node bridge
+        shell: bash
+        run: |
+          npx esbuild server.js \
+            --bundle --platform=node --format=cjs \
+            --outfile=server.bundle.cjs
+          npx pkg server.bundle.cjs \
+            --targets ${{ matrix.pkg_target }} \
+            --no-bytecode --public \
+            --output src-tauri/binaries/bridge-${{ matrix.target }}
+          rm server.bundle.cjs
+
+      # ── 4. Python ─────────────────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # Install Linux system libs needed by cv2 / Tauri webkit
+      - name: Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev librsvg2-dev patchelf \
+            libglib2.0-dev libgl1-mesa-glx libglib2.0-0
+
+      - name: Install Python build deps
+        shell: bash
+        run: pip install uv pyinstaller
+
+      # Platform-specific torch index (CPU-only on Linux/Windows; MPS included in Mac wheel)
+      - name: Install torch (Mac)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: uv pip install --system torch torchvision
+
+      - name: Install torch (Linux / Windows — CPU only, smaller download)
+        if: runner.os != 'macOS'
+        shell: bash
+        run: |
+          uv pip install --system \
+            torch torchvision \
+            --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install remaining Python dependencies
+        shell: bash
+        run: |
+          uv pip install --system \
+            "diffusers>=0.33.0" \
+            "transformers>=4.51.0" \
+            "accelerate>=0.30.0" \
+            "fastapi>=0.111.0" \
+            "uvicorn>=0.30.0" \
+            "pillow>=10.0.0" \
+            "pydantic>=2.0.0" \
+            opencv-python-headless \
+            "huggingface_hub>=0.22.0" \
+            safetensors \
+            sentencepiece \
+            tokenizers
+
+      # ── 5. Build Python server with PyInstaller ───────────────────────────────
+      - name: Build hf-image-server (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd hf-image-server
+          python -m PyInstaller main.py \
+            --onedir \
+            --name hf-image-server \
+            --distpath ../src-tauri/binaries \
+            --paths ../venv/lib/python3.11/site-packages \
+            --add-data "routes.py:." \
+            --add-data "services.py:." \
+            --add-data "adaptors:adaptors" \
+            --add-data "domain:domain" \
+            --hidden-import routes \
+            --hidden-import services \
+            --hidden-import adaptors \
+            --hidden-import domain \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on \
+            --collect-all diffusers \
+            --collect-all transformers \
+            --collect-all tokenizers \
+            --copy-metadata transformers \
+            --copy-metadata huggingface_hub \
+            --copy-metadata diffusers \
+            --copy-metadata tokenizers \
+            --copy-metadata safetensors \
+            --copy-metadata accelerate \
+            --copy-metadata tqdm \
+            --copy-metadata packaging \
+            --copy-metadata filelock \
+            --copy-metadata pyyaml \
+            --copy-metadata regex \
+            --copy-metadata numpy \
+            --noconfirm
+          # Rename executable to include target triple (required by Tauri externalBin)
+          mv ../src-tauri/binaries/hf-image-server/hf-image-server \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-${{ matrix.target }}
+
+      - name: Build hf-image-server (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cd hf-image-server
+          python -m PyInstaller main.py \
+            --onedir \
+            --name hf-image-server \
+            --distpath ../src-tauri/binaries \
+            --add-data "routes.py;." \
+            --add-data "services.py;." \
+            --add-data "adaptors;adaptors" \
+            --add-data "domain;domain" \
+            --hidden-import routes \
+            --hidden-import services \
+            --hidden-import adaptors \
+            --hidden-import domain \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on \
+            --collect-all diffusers \
+            --collect-all transformers \
+            --collect-all tokenizers \
+            --copy-metadata transformers \
+            --copy-metadata huggingface_hub \
+            --copy-metadata diffusers \
+            --copy-metadata tokenizers \
+            --copy-metadata safetensors \
+            --copy-metadata accelerate \
+            --copy-metadata tqdm \
+            --copy-metadata packaging \
+            --copy-metadata filelock \
+            --copy-metadata pyyaml \
+            --copy-metadata regex \
+            --copy-metadata numpy \
+            --noconfirm
+          mv ../src-tauri/binaries/hf-image-server/hf-image-server.exe \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-${{ matrix.target }}.exe
+
+      # ── 6. Rust toolchain ─────────────────────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # ── 7. Build Tauri app + create / update GitHub release ───────────────────
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name || inputs.tag }}
+          releaseName: 'Diffusion Studio X ${{ github.ref_name || inputs.tag }}'
+          releaseBody: |
+            ## Diffusion Studio X ${{ github.ref_name || inputs.tag }}
+
+            Local AI image and video generation desktop app.
+
+            ### Downloads
+            | Platform | File |
+            |---|---|
+            | macOS (Apple Silicon) | `*_aarch64.dmg` |
+            | macOS (Intel) | `*_x64.dmg` |
+            | Linux | `*_amd64.AppImage` |
+            | Windows | `*_x64_en-US.msi` |
+
+            ### First launch
+            - **macOS**: Right-click → Open if Gatekeeper blocks it (unsigned build)
+            - **Linux**: `chmod +x *.AppImage && ./*.AppImage`
+            - **Windows**: Allow the MSI through SmartScreen
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}
