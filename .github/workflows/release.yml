@@ -154,8 +154,18 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build bridge binaries for macOS
-        run: npm run build:server
+      - name: Build bridge binaries for macOS (universal)
+        run: |
+          npx esbuild server.js --bundle --platform=node --format=cjs --outfile=server.bundle.cjs
+          npx pkg server.bundle.cjs --targets node20-macos-arm64 --no-bytecode --public \
+            --output src-tauri/binaries/bridge-aarch64-apple-darwin
+          npx pkg server.bundle.cjs --targets node20-macos-x64 --no-bytecode --public \
+            --output src-tauri/binaries/bridge-x86_64-apple-darwin
+          lipo -create \
+            src-tauri/binaries/bridge-aarch64-apple-darwin \
+            src-tauri/binaries/bridge-x86_64-apple-darwin \
+            -output src-tauri/binaries/bridge-universal-apple-darwin
+          rm server.bundle.cjs
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -215,11 +225,13 @@ jobs:
             --copy-metadata regex \
             --copy-metadata numpy \
             --noconfirm
-          # macos-latest is arm64; copy the binary for both arches (matches local build:pyserver)
+          # macos-latest is arm64; produce arch-specific and universal variants
           mv ../src-tauri/binaries/hf-image-server/hf-image-server \
              ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin
           cp ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin \
              ../src-tauri/binaries/hf-image-server/hf-image-server-x86_64-apple-darwin
+          cp ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-universal-apple-darwin
           for d in requests tqdm urllib3 idna certifi charset_normalizer; do
             cp -r ../.venv/lib/python${PYVER}/site-packages/${d}-*.dist-info \
               ../src-tauri/binaries/hf-image-server/_internal/ 2>/dev/null || true
