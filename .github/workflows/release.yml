@@ -1,0 +1,347 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Required for tauri-action to create GitHub releases
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build bridge binary for Linux
+        run: |
+          npx esbuild server.js --bundle --platform=node --format=cjs --outfile=server.bundle.cjs
+          npx pkg server.bundle.cjs \
+            --targets node20-linux-x64 \
+            --no-bytecode --public \
+            --output src-tauri/binaries/bridge-x86_64-unknown-linux-gnu
+          rm server.bundle.cjs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        id: venv-cache
+        with:
+          path: .venv
+          key: venv-linux-${{ hashFiles('hf-image-server/requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install pyinstaller
+          .venv/bin/pip install -r hf-image-server/requirements.txt
+
+      - name: Build hf-image-server sidecar for Linux
+        run: |
+          PYVER=$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          cd hf-image-server
+          ../.venv/bin/pyinstaller main.py \
+            --onedir \
+            --name hf-image-server \
+            --distpath ../src-tauri/binaries \
+            --paths ../.venv/lib/python${PYVER}/site-packages \
+            --add-data "routes.py:." \
+            --add-data "services.py:." \
+            --add-data "adaptors:adaptors" \
+            --add-data "domain:domain" \
+            --hidden-import routes \
+            --hidden-import services \
+            --hidden-import adaptors \
+            --hidden-import domain \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on \
+            --collect-all diffusers \
+            --collect-all transformers \
+            --collect-all tokenizers \
+            --copy-metadata transformers \
+            --copy-metadata huggingface_hub \
+            --copy-metadata diffusers \
+            --copy-metadata tokenizers \
+            --copy-metadata safetensors \
+            --copy-metadata accelerate \
+            --copy-metadata tqdm \
+            --copy-metadata packaging \
+            --copy-metadata filelock \
+            --copy-metadata pyyaml \
+            --copy-metadata regex \
+            --copy-metadata numpy \
+            --noconfirm
+          mv ../src-tauri/binaries/hf-image-server/hf-image-server \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-x86_64-unknown-linux-gnu
+          for d in requests tqdm urllib3 idna certifi charset_normalizer; do
+            cp -r ../.venv/lib/python${PYVER}/site-packages/${d}-*.dist-info \
+              ../src-tauri/binaries/hf-image-server/_internal/ 2>/dev/null || true
+          done
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Diffusion Studio X ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install this release.'
+          releaseDraft: true
+          prerelease: false
+          args: --target x86_64-unknown-linux-gnu
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust targets
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build bridge binaries for macOS
+        run: npm run build:server
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        id: venv-cache
+        with:
+          path: .venv
+          key: venv-macos-${{ hashFiles('hf-image-server/requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install pyinstaller
+          .venv/bin/pip install -r hf-image-server/requirements.txt
+
+      - name: Build hf-image-server sidecar for macOS
+        run: |
+          PYVER=$(.venv/bin/python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+          cd hf-image-server
+          ../.venv/bin/pyinstaller main.py \
+            --onedir \
+            --name hf-image-server \
+            --distpath ../src-tauri/binaries \
+            --paths ../.venv/lib/python${PYVER}/site-packages \
+            --add-data "routes.py:." \
+            --add-data "services.py:." \
+            --add-data "adaptors:adaptors" \
+            --add-data "domain:domain" \
+            --hidden-import routes \
+            --hidden-import services \
+            --hidden-import adaptors \
+            --hidden-import domain \
+            --hidden-import uvicorn.logging \
+            --hidden-import uvicorn.loops.auto \
+            --hidden-import uvicorn.protocols.http.auto \
+            --hidden-import uvicorn.protocols.websockets.auto \
+            --hidden-import uvicorn.lifespan.on \
+            --collect-all diffusers \
+            --collect-all transformers \
+            --collect-all tokenizers \
+            --copy-metadata transformers \
+            --copy-metadata huggingface_hub \
+            --copy-metadata diffusers \
+            --copy-metadata tokenizers \
+            --copy-metadata safetensors \
+            --copy-metadata accelerate \
+            --copy-metadata tqdm \
+            --copy-metadata packaging \
+            --copy-metadata filelock \
+            --copy-metadata pyyaml \
+            --copy-metadata regex \
+            --copy-metadata numpy \
+            --noconfirm
+          # macos-latest is arm64; copy the binary for both arches (matches local build:pyserver)
+          mv ../src-tauri/binaries/hf-image-server/hf-image-server \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin
+          cp ../src-tauri/binaries/hf-image-server/hf-image-server-aarch64-apple-darwin \
+             ../src-tauri/binaries/hf-image-server/hf-image-server-x86_64-apple-darwin
+          for d in requests tqdm urllib3 idna certifi charset_normalizer; do
+            cp -r ../.venv/lib/python${PYVER}/site-packages/${d}-*.dist-info \
+              ../src-tauri/binaries/hf-image-server/_internal/ 2>/dev/null || true
+          done
+
+      - name: Build Tauri app (universal macOS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Diffusion Studio X ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install this release.'
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build bridge binary for Windows
+        run: |
+          npx esbuild server.js --bundle --platform=node --format=cjs --outfile=server.bundle.cjs
+          npx pkg server.bundle.cjs `
+            --targets node20-win-x64 `
+            --no-bytecode --public `
+            --output src-tauri/binaries/bridge-x86_64-pc-windows-msvc
+          Remove-Item server.bundle.cjs
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache Python venv
+        uses: actions/cache@v4
+        id: venv-cache
+        with:
+          path: .venv
+          key: venv-windows-${{ hashFiles('hf-image-server/requirements.txt') }}
+
+      - name: Install Python dependencies
+        if: steps.venv-cache.outputs.cache-hit != 'true'
+        run: |
+          python -m venv .venv
+          .venv\Scripts\pip install --upgrade pip
+          .venv\Scripts\pip install pyinstaller
+          .venv\Scripts\pip install -r hf-image-server/requirements.txt
+
+      - name: Build hf-image-server sidecar for Windows
+        shell: pwsh
+        run: |
+          Set-Location hf-image-server
+          & ..\venv\Scripts\pyinstaller.exe main.py `
+            --onedir `
+            --name hf-image-server `
+            --distpath ..\src-tauri\binaries `
+            --paths "..\venv\Lib\site-packages" `
+            --add-data "routes.py;." `
+            --add-data "services.py;." `
+            --add-data "adaptors;adaptors" `
+            --add-data "domain;domain" `
+            --hidden-import routes `
+            --hidden-import services `
+            --hidden-import adaptors `
+            --hidden-import domain `
+            --hidden-import uvicorn.logging `
+            --hidden-import uvicorn.loops.auto `
+            --hidden-import uvicorn.protocols.http.auto `
+            --hidden-import uvicorn.protocols.websockets.auto `
+            --hidden-import uvicorn.lifespan.on `
+            --collect-all diffusers `
+            --collect-all transformers `
+            --collect-all tokenizers `
+            --copy-metadata transformers `
+            --copy-metadata huggingface_hub `
+            --copy-metadata diffusers `
+            --copy-metadata tokenizers `
+            --copy-metadata safetensors `
+            --copy-metadata accelerate `
+            --copy-metadata tqdm `
+            --copy-metadata packaging `
+            --copy-metadata filelock `
+            --copy-metadata pyyaml `
+            --copy-metadata regex `
+            --copy-metadata numpy `
+            --noconfirm
+          Rename-Item ..\src-tauri\binaries\hf-image-server\hf-image-server.exe `
+            hf-image-server-x86_64-pc-windows-msvc.exe
+          foreach ($d in @('requests','tqdm','urllib3','idna','certifi','charset_normalizer')) {
+            Get-Item "..\venv\Lib\site-packages\$d-*.dist-info" -ErrorAction SilentlyContinue |
+              Copy-Item -Destination ..\src-tauri\binaries\hf-image-server\_internal\ -Recurse -Force
+          }
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Diffusion Studio X ${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download and install this release.'
+          releaseDraft: true
+          prerelease: false
+          args: --target x86_64-pc-windows-msvc
