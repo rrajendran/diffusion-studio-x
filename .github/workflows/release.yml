@@ -292,11 +292,11 @@ jobs:
         shell: pwsh
         run: |
           Set-Location hf-image-server
-          & ..\venv\Scripts\pyinstaller.exe main.py `
+          & ..\.venv\Scripts\pyinstaller.exe main.py `
             --onedir `
             --name hf-image-server `
             --distpath ..\src-tauri\binaries `
-            --paths "..\venv\Lib\site-packages" `
+            --paths "..\.venv\Lib\site-packages" `
             --add-data "routes.py;." `
             --add-data "services.py;." `
             --add-data "adaptors;adaptors" `
@@ -329,7 +329,7 @@ jobs:
           Rename-Item ..\src-tauri\binaries\hf-image-server\hf-image-server.exe `
             hf-image-server-x86_64-pc-windows-msvc.exe
           foreach ($d in @('requests','tqdm','urllib3','idna','certifi','charset_normalizer')) {
-            Get-Item "..\venv\Lib\site-packages\$d-*.dist-info" -ErrorAction SilentlyContinue |
+            Get-Item "..\.venv\Lib\site-packages\$d-*.dist-info" -ErrorAction SilentlyContinue |
               Copy-Item -Destination ..\src-tauri\binaries\hf-image-server\_internal\ -Recurse -Force
           }
 

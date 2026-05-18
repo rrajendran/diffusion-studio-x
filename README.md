@@ -47,8 +47,6 @@ Browser / Tauri WebView
 |----------|----------|------|
 | Hugging Face | `https://api-inference.huggingface.co/models/<model>` | Bearer token |
 | Ollama | `http://localhost:3001/api/ollama/generate` (bridge proxy) | none |
-| LM Studio | `http://localhost:1234/v1/images/generations` | none |
-| llama.cpp | `http://localhost:8080/completion` | none |
 
 ### Data flow
 
@@ -118,8 +116,8 @@ npm run dev
 | Service | URL |
 |---------|-----|
 | Web UI | http://localhost:5173 |
-| Bridge server | http://localhost:3001 |
-| Image server | http://localhost:8001 |
+| Ollama Bridge server | http://localhost:3001 |
+| Hugginface Bridge server | http://localhost:8001 |
 
 To start services individually:
 
