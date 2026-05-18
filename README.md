@@ -1,13 +1,13 @@
 # Diffusion Studio X
 
-A chat-based AI image generation app with a glassmorphism UI, available as both a **web app** and a native **desktop app** (via Tauri). Supports multiple inference backends: Hugging Face, Ollama, LM Studio, and llama.cpp.
+A chat-based AI image generation app with a glassmorphism UI, available as both a **web app** and a native **desktop app** (via Tauri). Supports Hugging Face cloud inference and local diffusion models via a Python image server.
 
 ---
 
 ## Features
 
 - **Chat-based workflow** — generate images through a conversational interface with persistent chat history
-- **Multi-provider support** — route generation to Hugging Face, Ollama, LM Studio, or llama.cpp
+- **Multi-provider support** — route generation to Hugging Face cloud or local diffusion models
 - **Image-to-image** — pass the previous image as edit context for iterative refinement
 - **Reference image** — attach a reference image to guide generation
 - **Aspect ratio control** — choose from common presets; dimensions are scaled automatically
@@ -15,7 +15,7 @@ A chat-based AI image generation app with a glassmorphism UI, available as both 
 - **Model browser** — browse and hot-load Hugging Face diffusion models from the UI
 - **Gallery** — browse and download previously generated images
 - **Lightbox** — full-screen image preview
-- **Desktop app** — packaged as a native macOS app via Tauri; bridge and image server run as sidecars
+- **Desktop app** — packaged as a native macOS/Windows/Linux app via Tauri; bridge and image server run as sidecars
 
 ---
 
@@ -47,6 +47,7 @@ Browser / Tauri WebView
 |----------|----------|------|
 | Hugging Face | `https://api-inference.huggingface.co/models/<model>` | Bearer token |
 | Ollama | `http://localhost:3001/api/ollama/generate` (bridge proxy) | none |
+| Local (Python server) | `http://localhost:8001` | none |
 
 ### Data flow
 
@@ -63,7 +64,7 @@ Browser / Tauri WebView
 | Dependency | Version | Notes |
 |-----------|---------|-------|
 | Node.js | ≥ 20 | |
-| Python | 3.13 | For local image server |
+| Python | 3.11+ | For local image server |
 | Rust + Cargo | stable | Only for Tauri desktop build |
 | PyTorch | ≥ 2.3.0 | MPS (Apple Silicon), CUDA, or CPU |
 
@@ -101,8 +102,8 @@ npm install
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r hf-image-server/requirements.txt
 ```
 
 ### 3. Run in web mode
@@ -116,8 +117,8 @@ npm run dev
 | Service | URL |
 |---------|-----|
 | Web UI | http://localhost:5173 |
-| Ollama Bridge server | http://localhost:3001 |
-| Hugginface Bridge server | http://localhost:8001 |
+| Bridge server | http://localhost:3001 |
+| Python image server | http://localhost:8001 |
 
 To start services individually:
 
@@ -133,7 +134,7 @@ npm run dev:images   # Python image server only (port 8001)
 npm run tauri:dev
 ```
 
-Tauri automatically starts Vite (`dev:ui`) before launching the desktop window. The bridge and image server binaries must already be built (see [Building sidecars](#building-sidecars)).
+The bridge and image server binaries must already be built before running in production mode — see [Building sidecars](#building-sidecars).
 
 ---
 
@@ -141,7 +142,7 @@ Tauri automatically starts Vite (`dev:ui`) before launching the desktop window. 
 
 Provider settings are saved to `localStorage` under the key `img-gen-config`:
 
-- **Provider** — `huggingface` | `ollama` | `lmstudio` | `llamacpp`
+- **Provider** — `huggingface` | `ollama` | `local`
 - **Model** — model ID or name (provider-specific)
 - **HF API key** — required for Hugging Face
 - **Inference steps** — number of diffusion steps
@@ -179,7 +180,7 @@ Required when `server.js` changes, and before `tauri:build`:
 npm run build:server
 ```
 
-Outputs:
+Outputs (macOS):
 - `src-tauri/binaries/bridge-aarch64-apple-darwin`
 - `src-tauri/binaries/bridge-x86_64-apple-darwin`
 
@@ -188,11 +189,32 @@ Outputs:
 Required when the Python server code changes, and before `tauri:build`:
 
 ```bash
-source .venv/bin/activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 npm run build:pyserver
 ```
 
 Outputs to `src-tauri/binaries/hf-image-server/`.
+
+---
+
+## CI / Releases
+
+GitHub Actions builds and packages the Tauri desktop app for all three platforms on every version tag (`v*`):
+
+| Platform | Runner | Artifacts |
+|----------|--------|-----------|
+| Linux | `ubuntu-22.04` | `.AppImage`, `.deb` |
+| macOS | `macos-latest` | Universal `.dmg` |
+| Windows | `windows-latest` | `.msi`, `.exe` |
+
+Push a tag to trigger a release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+A draft release is created automatically — review and publish from the GitHub Releases page.
 
 ---
 
@@ -230,6 +252,8 @@ server.js                  # Express bridge server
 src-tauri/                 # Tauri desktop app (Rust)
   src/lib.rs               # Sidecar lifecycle, port management
   tauri.conf.json          # Tauri configuration
+.github/workflows/
+  release.yml              # Cross-platform Tauri release pipeline
 ```
 
 ---
