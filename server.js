@@ -44,7 +44,7 @@ function httpPost(url, bodyObj, signal) {
       res.on('end', () => {
         try {
           const text = Buffer.concat(chunks).toString()
-          resolve({ status: res.statusCode, json: () => JSON.parse(text) })
+          resolve({ status: res.statusCode, text, json: () => JSON.parse(text) })
         } catch (e) { reject(e) }
       })
     })
@@ -532,13 +532,11 @@ app.post('/api/ollama/generate', async (req, res) => {
       if (resolvedRef) body.images = [resolvedRef]
     }
 
-    const ollamaRes = await fetch(`${ollamaBase}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    // Use httpPost (Node http.request) instead of fetch to avoid undici's 300s
+    // headersTimeout, which kills slow image generation models mid-inference.
+    const ollamaRes = await httpPost(`${ollamaBase}/api/generate`, body)
+    const rawText = ollamaRes.text
 
-    const rawText = await ollamaRes.text()
     if (!rawText || !rawText.trim()) {
       throw new Error(`Ollama returned an empty response (status ${ollamaRes.status})`)
     }
@@ -553,7 +551,7 @@ app.post('/api/ollama/generate', async (req, res) => {
       throw new Error(`Ollama returned invalid JSON: ${rawText.slice(0, 300)}`)
     }
 
-    if (!ollamaRes.ok) throw new Error(data.error ?? `Ollama error: ${ollamaRes.status}`)
+    if (ollamaRes.status >= 400) throw new Error(data.error ?? `Ollama error: ${ollamaRes.status}`)
 
     if (!data.image) throw new Error('Ollama returned no image data')
     // console.log(`[Ollama] generation successful, saving image... ${data.image.slice(0, 30)}...`)

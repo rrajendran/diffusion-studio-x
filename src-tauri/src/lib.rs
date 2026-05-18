@@ -3,7 +3,7 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{WebviewUrl, WebviewWindowBuilder};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
@@ -20,8 +20,8 @@ struct AppState {
 
 /// Kill any process currently listening on `port` so our sidecar can bind it.
 /// Returns true if a process was found and killed.
+#[cfg(unix)]
 fn kill_port(port: u16) -> bool {
-    // lsof -ti TCP:<port> prints PIDs; xargs kill -9 terminates them.
     let out = Command::new("sh")
         .arg("-c")
         .arg(format!("lsof -ti TCP:{port}"))
@@ -34,6 +34,9 @@ fn kill_port(port: u16) -> bool {
         .status();
     had_process
 }
+
+#[cfg(not(unix))]
+fn kill_port(_port: u16) -> bool { false }
 
 /// Find a free TCP port, starting from `preferred`. Falls back to OS-assigned if preferred is taken.
 fn find_free_port(preferred: u16) -> u16 {
@@ -107,25 +110,39 @@ pub fn run() {
                 Err(e) => log::error!("Bridge sidecar not found: {}", e),
             }
 
-            // Spawn Python image-server directly from its source directory so that
-            // PyInstaller's _internal/ sibling is always co-located with the binary.
-            // Tauri's sidecar mechanism copies only the binary to target/debug/,
-            // leaving _internal/ behind — causing the PyInstaller bootloader to fail.
+            // Spawn the Python image-server from the directory that contains both
+            // the binary AND _internal/ as a sibling — required by PyInstaller's
+            // onedir bootloader. In debug, this is src-tauri/binaries/hf-image-server/.
+            // In release, hf-image-server is bundled as a Tauri resource (not externalBin),
+            // so the entire directory tree (binary + _internal/) lands in resource_dir().
             let img_dir = {
                 #[cfg(debug_assertions)]
                 { std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join("hf-image-server") }
                 #[cfg(not(debug_assertions))]
                 {
-                    // Release: external binary + _internal/ are both in Contents/MacOS/
-                    std::env::current_exe()
-                        .unwrap_or_default()
-                        .parent()
-                        .unwrap_or(std::path::Path::new("."))
-                        .to_path_buf()
+                    app.path().resource_dir()
+                        .map(|r| r.join("binaries").join("hf-image-server"))
+                        .unwrap_or_else(|_| std::env::current_exe()
+                            .unwrap_or_default()
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_default())
                 }
             };
-            let arch = if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" };
-            let img_bin = img_dir.join(format!("hf-image-server-{}", arch));
+            let img_bin_name = if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+                "hf-image-server-x86_64-pc-windows-msvc.exe"
+            } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
+                "hf-image-server-aarch64-pc-windows-msvc.exe"
+            } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+                "hf-image-server-x86_64-unknown-linux-gnu"
+            } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
+                "hf-image-server-aarch64-unknown-linux-gnu"
+            } else if cfg!(target_arch = "aarch64") {
+                "hf-image-server-aarch64-apple-darwin"
+            } else {
+                "hf-image-server-x86_64-apple-darwin"
+            };
+            let img_bin = img_dir.join(img_bin_name);
             log::info!("Spawning image-server from {:?}", img_bin);
             match Command::new(&img_bin)
                 .current_dir(&img_dir)

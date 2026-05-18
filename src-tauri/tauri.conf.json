@@ -27,8 +27,10 @@
       "icons/icon.png"
     ],
     "externalBin": [
-      "binaries/bridge",
-      "binaries/hf-image-server/hf-image-server"
+      "binaries/bridge"
+    ],
+    "resources": [
+      "binaries/hf-image-server/**/*"
     ],
     "macOS": {
       "minimumSystemVersion": "11.0",
