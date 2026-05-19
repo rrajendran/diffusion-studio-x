@@ -136,23 +136,42 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
       const llmModel = config.llmModel || 'llama3'
       bridgeLog(`useChat: LLM call → ${llmUrl} model=${llmModel}`)
 
-      const llmRes = await fetch(llmUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: llmModel,
-          messages: llmMessages,
-          max_tokens: 512,
-          stream: false,
-          format: 'json',
-        }),
-        signal,
-      })
+      // 90-second timeout for the LLM routing step — image generation itself
+      // has its own separate timeout on the bridge side.
+      const llmAbort = new AbortController()
+      const llmTimer = setTimeout(() => llmAbort.abort(), 90_000)
+      // Combine with the user-cancel signal
+      signal?.addEventListener('abort', () => llmAbort.abort(), { once: true })
+
+      let llmRes
+      try {
+        llmRes = await fetch(llmUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: llmModel,
+            messages: llmMessages,
+            max_tokens: 512,
+            stream: false,
+            // No format:'json' — it causes many models (gemma, mistral, etc.) to
+            // hang indefinitely. We extract JSON from free-form text instead.
+          }),
+          signal: llmAbort.signal,
+        })
+      } catch (fetchErr) {
+        clearTimeout(llmTimer)
+        if (fetchErr.name === 'AbortError') {
+          if (signal?.aborted) throw fetchErr  // user cancelled — bubble up
+          throw new Error(`LLM timed out after 90s — model '${llmModel}' may be too slow or not running`)
+        }
+        throw fetchErr
+      }
+      clearTimeout(llmTimer)
 
       bridgeLog(`useChat: LLM response status=${llmRes.status} ok=${llmRes.ok}`)
 
       if (!llmRes.ok) {
-        throw new Error(`Conversational LLM Error: ${llmRes.status}. Is Ollama running with model '${config.llmModel}'?`)
+        throw new Error(`Conversational LLM Error: ${llmRes.status}. Is Ollama running with model '${llmModel}'?`)
       }
 
       const llmData = await llmRes.json()
@@ -161,14 +180,24 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
 
       let parsed = { response: 'I could not parse my own output.', imagePrompt: null }
 
+      // Try strict JSON parse first, then extract the first {...} block from free-form text.
       try {
         parsed = JSON.parse(rawContent)
-      } catch (parseErr) {
-        bridgeLog(`useChat: JSON parse failed: ${parseErr.message} — using rawContent as response`, 'warn')
-        parsed.response = rawContent
+      } catch {
+        const jsonMatch = rawContent.match(/\{[\s\S]*\}/)
+        if (jsonMatch) {
+          try { parsed = JSON.parse(jsonMatch[0]) } catch { /* fall through */ }
+        }
+        if (!parsed.imagePrompt) {
+          // Model didn't return structured JSON — treat whole response as conversational
+          // and fall back to using the original user prompt as the image prompt
+          parsed.response = rawContent
+          parsed.imagePrompt = prompt
+          bridgeLog(`useChat: no JSON from LLM — using raw user prompt as imagePrompt`, 'warn')
+        }
       }
 
-      bridgeLog(`useChat: parsed.imagePrompt=${JSON.stringify(parsed.imagePrompt)}`)
+      bridgeLog(`useChat: parsed.imagePrompt=${JSON.stringify(parsed.imagePrompt?.slice(0, 100))}`)
 
       let imageUrl = null
       let imageMeta = null
