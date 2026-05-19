@@ -165,6 +165,14 @@ async function scanHFCache() {
 
 app.get('/health', (_req, res) => res.json({ status: 'ok' }))
 
+app.post('/api/debug', (req, res) => {
+  const { level = 'info', msg } = req.body
+  if (level === 'error') console.error(`[ui] ${msg}`)
+  else if (level === 'warn')  console.warn(`[ui] ${msg}`)
+  else                        console.log(`[ui] ${msg}`)
+  res.json({ ok: true })
+})
+
 app.get('/api/hf-cached-models', async (req, res) => {
   const models = await scanHFCache()
   res.json(models)

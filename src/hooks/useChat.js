@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { loadChats, saveChats, loadActiveId, saveActiveId, newChatObj } from '../store/chatStore.js'
 import { generateImage } from '../providers/index.js'
-import { OLLAMA } from '../lib/ports.js'
+import { OLLAMA, bridgeLog } from '../lib/ports.js'
 
 export function useChat(config) {
   const [chats, setChats] = useState([])
@@ -132,11 +132,15 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
       ]
 
       const ollamaBase = (config.ollamaBaseUrl || OLLAMA).replace(/\/$/, '')
-      const llmRes = await fetch(`${ollamaBase}/api/chat`, {
+      const llmUrl = `${ollamaBase}/api/chat`
+      const llmModel = config.llmModel || 'llama3'
+      bridgeLog(`useChat: LLM call → ${llmUrl} model=${llmModel}`)
+
+      const llmRes = await fetch(llmUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: config.llmModel || 'llama3',
+          model: llmModel,
           messages: llmMessages,
           max_tokens: 512,
           stream: false,
@@ -145,26 +149,37 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
         signal,
       })
 
+      bridgeLog(`useChat: LLM response status=${llmRes.status} ok=${llmRes.ok}`)
+
       if (!llmRes.ok) {
         throw new Error(`Conversational LLM Error: ${llmRes.status}. Is Ollama running with model '${config.llmModel}'?`)
       }
 
       const llmData = await llmRes.json()
       const rawContent = llmData.message?.content ?? llmData.choices?.[0]?.message?.content ?? ''
+      bridgeLog(`useChat: LLM raw content: ${rawContent.slice(0, 300)}`)
+
       let parsed = { response: 'I could not parse my own output.', imagePrompt: null }
 
       try {
         parsed = JSON.parse(rawContent)
-      } catch {
+      } catch (parseErr) {
+        bridgeLog(`useChat: JSON parse failed: ${parseErr.message} — using rawContent as response`, 'warn')
         parsed.response = rawContent
       }
+
+      bridgeLog(`useChat: parsed.imagePrompt=${JSON.stringify(parsed.imagePrompt)}`)
 
       let imageUrl = null
       let imageMeta = null
       if (parsed.imagePrompt) {
+        bridgeLog(`useChat: calling generateImage provider=${config.provider} model=${config.model}`)
         const genRes = await generateImage(parsed.imagePrompt, config, lastImageUrl, aspectRatio, signal, referenceImageUrl)
         imageUrl = genRes.imageUrl
         imageMeta = genRes.meta ?? null
+        bridgeLog(`useChat: generateImage done imageUrl=${imageUrl}`)
+      } else {
+        bridgeLog(`useChat: imagePrompt is null/empty — no image generation`, 'warn')
       }
 
       setChats(prev => prev.map(c =>
