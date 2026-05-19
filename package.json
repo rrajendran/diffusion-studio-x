@@ -1,7 +1,7 @@
 {
   "name": "image-generator",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "scripts": {
     "kill-ports": "lsof -ti TCP:5173,3001,8001,8002 | xargs kill -9 2>/dev/null; true",
