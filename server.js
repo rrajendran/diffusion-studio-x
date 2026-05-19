@@ -532,13 +532,30 @@ app.post('/api/ollama/generate', async (req, res) => {
       if (resolvedRef) body.images = [resolvedRef]
     }
 
-    // Use httpPost (Node http.request) instead of fetch to avoid undici's 300s
-    // headersTimeout, which kills slow image generation models mid-inference.
-    const ollamaRes = await httpPost(`${ollamaBase}/api/generate`, body)
-    const rawText = ollamaRes.text
+    // Use fetch with an explicit 20-min AbortController so slow image models
+    // don't hit undici's default 300s headersTimeout mid-inference.
+    const ollamaAbort = new AbortController()
+    const ollamaTimer = setTimeout(() => ollamaAbort.abort(), 1_200_000)
+    let ollamaFetch
+    try {
+      ollamaFetch = await fetch(`${ollamaBase}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: ollamaAbort.signal,
+      })
+    } catch (fetchErr) {
+      clearTimeout(ollamaTimer)
+      if (fetchErr.name === 'AbortError') throw new Error('Ollama request timed out after 20 minutes')
+      const cause = fetchErr.cause?.code ?? fetchErr.code ?? ''
+      if (cause === 'ECONNREFUSED') throw new Error(`Cannot connect to Ollama at ${ollamaBase} — is Ollama installed and running?`)
+      throw fetchErr
+    }
+    clearTimeout(ollamaTimer)
 
+    const rawText = await ollamaFetch.text()
     if (!rawText || !rawText.trim()) {
-      throw new Error(`Ollama returned an empty response (status ${ollamaRes.status})`)
+      throw new Error(`Ollama returned an empty response (status ${ollamaFetch.status})`)
     }
 
     // Ollama may stream NDJSON even with stream:false on some versions —
@@ -551,7 +568,7 @@ app.post('/api/ollama/generate', async (req, res) => {
       throw new Error(`Ollama returned invalid JSON: ${rawText.slice(0, 300)}`)
     }
 
-    if (ollamaRes.status >= 400) throw new Error(data.error ?? `Ollama error: ${ollamaRes.status}`)
+    if (!ollamaFetch.ok) throw new Error(data.error ?? `Ollama error: ${ollamaFetch.status}`)
 
     if (!data.image) throw new Error('Ollama returned no image data')
     // console.log(`[Ollama] generation successful, saving image... ${data.image.slice(0, 30)}...`)

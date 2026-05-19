@@ -144,6 +144,22 @@ pub fn run() {
             };
             let img_bin = img_dir.join(img_bin_name);
             log::info!("Spawning image-server from {:?}", img_bin);
+
+            // Resources dir does not preserve the executable bit on macOS.
+            // Set it before spawning so the PyInstaller bootloader can run.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(meta) = std::fs::metadata(&img_bin) {
+                    let mut perms = meta.permissions();
+                    if perms.mode() & 0o111 == 0 {
+                        perms.set_mode(perms.mode() | 0o755);
+                        let _ = std::fs::set_permissions(&img_bin, perms);
+                        log::info!("Fixed execute permission on {:?}", img_bin);
+                    }
+                }
+            }
+
             match Command::new(&img_bin)
                 .current_dir(&img_dir)
                 .env("IMAGE_SERVER_PORT", image_server_port.to_string())
