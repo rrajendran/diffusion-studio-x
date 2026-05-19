@@ -57,13 +57,16 @@ function httpPost(url, bodyObj, signal) {
 
 const app = express()
 // Allow any localhost origin and the Tauri custom scheme (tauri://localhost) used in production builds.
+app.use((req, _res, next) => {
+  console.log(`[bridge] ${req.method} ${req.path} origin="${req.headers.origin ?? '—'}"`)
+  next()
+})
+
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || /^(https?:\/\/(localhost|127\.0\.0\.1)|tauri:\/\/)/.test(origin)) {
-      cb(null, true)
-    } else {
-      cb(null, false)
-    }
+    const allowed = !origin || /^(https?:\/\/(localhost|127\.0\.0\.1)|tauri:\/\/)/.test(origin)
+    console.log(`[bridge] CORS origin="${origin ?? '—'}" allowed=${allowed}`)
+    cb(null, allowed)
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
