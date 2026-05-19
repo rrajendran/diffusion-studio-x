@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { OLLAMA, LMSTUDIO, BRIDGE } from '../lib/ports.js'
+import { OLLAMA, BRIDGE } from '../lib/ports.js'
 import { ADAPTER_FAMILIES } from '../config/features.js'
 
 export function filterModelsByFeatures(models) {
@@ -11,21 +11,6 @@ export function filterModelsByFeatures(models) {
   })
 }
 
-// Mirror of scanner.py heuristics — used to split LM Studio API models into image vs LLM
-const IMAGE_KW = ['flux', 'stable-diffusion', 'sdxl', 'sd3', 'sd-xl', 'z-image', 'zimage',
-  'image-turbo', 'kandinsky', 'playgroundai', 'wuerstchen', 'pixart', 'kolors',
-  'auraflow', 'hunyuan', 'lumina', 'cogview', 'diffusion']
-const TEXT_KW  = ['llama', 'mistral', 'gemma', 'phi', 'falcon', 'vicuna', 'qwen',
-  'deepseek', 'yi-', 'openchat', 'wizard', 'orca', 'hermes', 'neural-chat',
-  'starling', 'mamba', 'rwkv', 'embed', 'e5-', 'bge-', 'gte-', 'nomic-embed', 'sentence-t5']
-
-function looksLikeImageModel(key = '') {
-  const lower = key.toLowerCase()
-  if (TEXT_KW.some(k => lower.includes(k))) return false
-  if (IMAGE_KW.some(k => lower.includes(k))) return true
-  return false
-}
-
 const FETCHERS = {
   ollama: async (baseUrl) => {
     const base = (baseUrl || OLLAMA).replace(/\/$/, '')
@@ -33,32 +18,6 @@ const FETCHERS = {
     const d = await r.json()
     const names = (d.models ?? []).map(m => m.name)
     return { imageModels: names, llmModels: names }
-  },
-  lmstudio: async (_baseUrl) => {
-    const lmsBase = LMSTUDIO   // port 1234 — LM Studio app
-    const [imgRes, llmRes] = await Promise.allSettled([
-      fetch(`${BRIDGE}/api/lmstudio/models`),   // lms-image-server (local GGUF/MLX)
-      fetch(`${lmsBase}/api/v1/models`),         // LM Studio app REST API
-    ])
-
-    // Local GGUF/MLX models from lms-image-server (keys are absolute paths)
-    const localImageModels = imgRes.status === 'fulfilled' && imgRes.value.ok
-      ? (await imgRes.value.json()).map(m => m.key)
-      : []
-
-    const llmAll = llmRes.status === 'fulfilled' && llmRes.value.ok
-      ? (await llmRes.value.json()).models ?? []
-      : []
-
-    // Split LM Studio app models by keyword: image models + text LLMs
-    const lmsImageModels = llmAll.filter(m => looksLikeImageModel(m.key)).map(m => m.key)
-    const llmModels = llmAll.filter(m => !looksLikeImageModel(m.key) && m.type === 'llm').map(m => m.key)
-
-    // Merge: local models first (routed to lms-image-server), then LM Studio app image models
-    const localSet = new Set(localImageModels)
-    const imageModels = [...localImageModels, ...lmsImageModels.filter(k => !localSet.has(k))]
-
-    return { imageModels, llmModels }
   },
 }
 
@@ -107,7 +66,7 @@ export function supportsVideo(modelId, capabilities) {
 }
 
 export function useModels(provider, config = {}) {
-  const { hfBaseUrl, ollamaBaseUrl, lmstudioBaseUrl } = config
+  const { hfBaseUrl, ollamaBaseUrl } = config
   const [imageModels, setImageModels] = useState([])
   const [llmModels, setLlmModels] = useState([])
   const [loadingModels, setLoadingModels] = useState(false)
@@ -160,9 +119,7 @@ export function useModels(provider, config = {}) {
     const MAX_RETRIES = 5
     const RETRY_MS = 2000
 
-    const baseUrl = provider === 'ollama' ? ollamaBaseUrl
-                  : provider === 'lmstudio' ? lmstudioBaseUrl
-                  : undefined
+    const baseUrl = provider === 'ollama' ? ollamaBaseUrl : undefined
 
     async function attempt(n = 0) {
       if (cancelled) return
@@ -198,7 +155,7 @@ export function useModels(provider, config = {}) {
 
     attempt()
     return () => { cancelled = true; clearTimeout(retryTimer) }
-  }, [provider, ollamaBaseUrl, lmstudioBaseUrl])
+  }, [provider, ollamaBaseUrl])
 
   return { imageModels, llmModels, loadingModels, fetchError, modelCapabilities }
 }

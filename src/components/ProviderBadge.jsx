@@ -1,7 +1,5 @@
 const LABELS = {
   ollama: 'Ollama',
-  lmstudio: 'LM Studio',
-  llamacpp: 'llama.cpp',
   huggingface: 'Hugging Face',
 }
 

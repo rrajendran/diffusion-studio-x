@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { loadChats, saveChats, loadActiveId, saveActiveId, newChatObj } from '../store/chatStore.js'
 import { generateImage } from '../providers/index.js'
-import { LMSTUDIO, OLLAMA } from '../lib/ports.js'
+import { OLLAMA } from '../lib/ports.js'
 
 export function useChat(config) {
   const [chats, setChats] = useState([])
@@ -108,8 +108,6 @@ export function useChat(config) {
       }
 
       // Other providers: route through conversational LLM to extract imagePrompt
-      const isLmStudio = config.provider === 'lmstudio'
-
       const chatHistory = currentChat ? [...currentChat.messages] : []
       const historyStr = chatHistory.length > 0
         ? chatHistory.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n')
@@ -128,36 +126,27 @@ Return ONLY a JSON object with this exact structure (no markdown, no extra text)
   "imagePrompt": "The full, self-contained text-to-image prompt, or null if no image is requested"
 }${refImageNote}`
 
-      const llmMessages = isLmStudio
-        ? [{ role: 'user', content: `${systemPrompt}\n\nHistory:\n${historyStr}\n\nCurrent User Input: ${prompt}` }]
-        : [{ role: 'system', content: systemPrompt }, { role: 'user', content: `History:\n${historyStr}\n\nCurrent User Input: ${prompt}` }]
+      const llmMessages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `History:\n${historyStr}\n\nCurrent User Input: ${prompt}` },
+      ]
 
-      const lmBase = (config.lmstudioBaseUrl || LMSTUDIO).replace(/\/$/, '')
       const ollamaBase = (config.ollamaBaseUrl || OLLAMA).replace(/\/$/, '')
-      const llmUrl = isLmStudio
-        ? `${lmBase}/v1/chat/completions`
-        : `${ollamaBase}/api/chat`
-
-      const llmRes = await fetch(llmUrl, {
+      const llmRes = await fetch(`${ollamaBase}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: config.llmModel || (isLmStudio ? 'default' : 'llama3'),
+          model: config.llmModel || 'llama3',
           messages: llmMessages,
           max_tokens: 512,
           stream: false,
-          ...(isLmStudio
-            ? { response_format: { type: 'json_object' } }
-            : { format: 'json' }),
+          format: 'json',
         }),
         signal,
       })
 
       if (!llmRes.ok) {
-        const server = isLmStudio
-          ? `LM Studio on :1234 with model '${config.llmModel}'`
-          : `Ollama on :11434 with model '${config.llmModel}'`
-        throw new Error(`Conversational LLM Error: ${llmRes.status}. Is ${server} running?`)
+        throw new Error(`Conversational LLM Error: ${llmRes.status}. Is Ollama running with model '${config.llmModel}'?`)
       }
 
       const llmData = await llmRes.json()

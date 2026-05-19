@@ -3,10 +3,8 @@
 // Changes here automatically propagate to the Settings toggles and model filter.
 
 export const PROVIDERS = [
-  { value: 'huggingface', label: 'Hugging Face', hint: 'Diffusers image server + HF Hub models' , defaultEnabled: true },
-  { value: 'ollama',      label: 'Ollama',        hint: 'Local Ollama image models', defaultEnabled: true },
-  { value: 'lmstudio',   label: 'LM Studio',     hint: 'Local LM Studio models (port 1234)', defaultEnabled: false },
-  { value: 'llamacpp',   label: 'llama.cpp',     hint: 'Local llama.cpp server (port 8080)', defaultEnabled: false },
+  { value: 'huggingface', label: 'Hugging Face', hint: 'Diffusers image server + HF Hub models', defaultEnabled: true },
+  { value: 'ollama',      label: 'Ollama',        hint: 'Local Ollama image models',              defaultEnabled: true },
 ]
 
 // Each entry needs:
