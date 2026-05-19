@@ -1,49 +1,40 @@
-use std::io::BufRead;
 use std::net::TcpListener;
-use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 
-/// Holds the resolved ports and sidecar process handles so we can shut them down on exit.
 #[allow(dead_code)]
 struct AppState {
     bridge_port: u16,
-    image_server_port: u16,
     bridge_child: Mutex<Option<CommandChild>>,
-    /// Owned via std::process::Child so we can set current_dir to the binary's
-    /// own directory — required for PyInstaller onedir (_internal/ must be a sibling).
-    image_server_child: Mutex<Option<std::process::Child>>,
 }
 
-/// Kill any process currently listening on `port` so our sidecar can bind it.
-/// Returns true if a process was found and killed.
+/// Kill any process on `port` so the bridge sidecar can bind it.
 #[cfg(unix)]
 fn kill_port(port: u16) -> bool {
+    use std::process::Command;
     let out = Command::new("sh")
         .arg("-c")
         .arg(format!("lsof -ti TCP:{port}"))
         .output()
         .ok();
-    let had_process = out.map_or(false, |o| !String::from_utf8_lossy(&o.stdout).trim().is_empty());
+    let had = out.map_or(false, |o| !String::from_utf8_lossy(&o.stdout).trim().is_empty());
     let _ = Command::new("sh")
         .arg("-c")
         .arg(format!("lsof -ti TCP:{port} | xargs kill -9 2>/dev/null"))
         .status();
-    had_process
+    had
 }
 
 #[cfg(not(unix))]
 fn kill_port(_port: u16) -> bool { false }
 
-/// Find a free TCP port, starting from `preferred`. Falls back to OS-assigned if preferred is taken.
 fn find_free_port(preferred: u16) -> u16 {
     if TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
         return preferred;
     }
-    // Let OS pick a free port
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind to a free port");
     listener.local_addr().unwrap().port()
 }
@@ -55,44 +46,39 @@ fn get_bridge_url(state: tauri::State<Arc<AppState>>) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let bridge_killed  = kill_port(3001);
-    let imgsvr_killed  = kill_port(8001);
-    // Give the OS time to fully release sockets after SIGKILL.
-    // Without this, the next TcpListener::bind or the sidecar's bind can race
-    // against the kernel reclaiming the port, resulting in EADDRINUSE.
-    if bridge_killed || imgsvr_killed {
+    // Only free the bridge port — do NOT kill 8001; the user may have already
+    // started the HF image server there manually.
+    let bridge_killed = kill_port(3001);
+    if bridge_killed {
         std::thread::sleep(Duration::from_millis(400));
     }
     let bridge_port = find_free_port(3001);
-    let image_server_port = find_free_port(8001);
 
     let state = Arc::new(AppState {
         bridge_port,
-        image_server_port,
         bridge_child: Mutex::new(None),
-        image_server_child: Mutex::new(None),
     });
 
     let state_manage = Arc::clone(&state);
-    let state_exit  = Arc::clone(&state);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())
         .plugin(tauri_plugin_shell::init())
         .manage(state_manage)
         .setup(move |app| {
-            // Spawn Node bridge sidecar
+            // Spawn Node bridge sidecar.
+            // IMAGE_SERVER_PORT defaults to 8001 — the user starts the HF image
+            // server manually on that port before launching the app.
             match app.shell().sidecar("bridge") {
                 Ok(cmd) => {
                     match cmd
                         .env("BRIDGE_PORT", bridge_port.to_string())
-                        .env("IMAGE_SERVER_PORT", image_server_port.to_string())
+                        .env("IMAGE_SERVER_PORT", "8001")
                         .spawn()
                     {
                         Ok((mut rx, child)) => {
                             *state.bridge_child.lock().unwrap() = Some(child);
                             log::info!("Bridge sidecar started on port {}", bridge_port);
-                            // Drain stdout/stderr so the pipe buffer never fills and blocks the process.
                             tauri::async_runtime::spawn(async move {
                                 while let Some(event) = rx.recv().await {
                                     match event {
@@ -110,90 +96,10 @@ pub fn run() {
                 Err(e) => log::error!("Bridge sidecar not found: {}", e),
             }
 
-            // Spawn the Python image-server from the directory that contains both
-            // the binary AND _internal/ as a sibling — required by PyInstaller's
-            // onedir bootloader. In debug, this is src-tauri/binaries/hf-image-server/.
-            // In release, hf-image-server is bundled as a Tauri resource (not externalBin),
-            // so the entire directory tree (binary + _internal/) lands in resource_dir().
-            let img_dir = {
-                #[cfg(debug_assertions)]
-                { std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("binaries").join("hf-image-server") }
-                #[cfg(not(debug_assertions))]
-                {
-                    app.path().resource_dir()
-                        .map(|r| r.join("binaries").join("hf-image-server"))
-                        .unwrap_or_else(|_| std::env::current_exe()
-                            .unwrap_or_default()
-                            .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_default())
-                }
-            };
-            let img_bin_name = if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-                "hf-image-server-x86_64-pc-windows-msvc.exe"
-            } else if cfg!(all(target_os = "windows", target_arch = "aarch64")) {
-                "hf-image-server-aarch64-pc-windows-msvc.exe"
-            } else if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-                "hf-image-server-x86_64-unknown-linux-gnu"
-            } else if cfg!(all(target_os = "linux", target_arch = "aarch64")) {
-                "hf-image-server-aarch64-unknown-linux-gnu"
-            } else if cfg!(target_arch = "aarch64") {
-                "hf-image-server-aarch64-apple-darwin"
-            } else {
-                "hf-image-server-x86_64-apple-darwin"
-            };
-            let img_bin = img_dir.join(img_bin_name);
-            log::info!("Spawning image-server from {:?}", img_bin);
-
-            // Resources dir does not preserve the executable bit on macOS.
-            // Set it before spawning so the PyInstaller bootloader can run.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if let Ok(meta) = std::fs::metadata(&img_bin) {
-                    let mut perms = meta.permissions();
-                    if perms.mode() & 0o111 == 0 {
-                        perms.set_mode(perms.mode() | 0o755);
-                        let _ = std::fs::set_permissions(&img_bin, perms);
-                        log::info!("Fixed execute permission on {:?}", img_bin);
-                    }
-                }
-            }
-
-            match Command::new(&img_bin)
-                .current_dir(&img_dir)
-                .env("IMAGE_SERVER_PORT", image_server_port.to_string())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(mut child) => {
-                    if let Some(stdout) = child.stdout.take() {
-                        std::thread::spawn(move || {
-                            for line in std::io::BufReader::new(stdout).lines().flatten() {
-                                log::info!("[hf-image-server] {}", line);
-                            }
-                        });
-                    }
-                    if let Some(stderr) = child.stderr.take() {
-                        std::thread::spawn(move || {
-                            for line in std::io::BufReader::new(stderr).lines().flatten() {
-                                log::warn!("[hf-image-server] {}", line);
-                            }
-                        });
-                    }
-                    *state.image_server_child.lock().unwrap() = Some(child);
-                    log::info!("Image server sidecar started on port {}", image_server_port);
-                }
-                Err(e) => log::error!("Failed to spawn image-server from {:?}: {}", img_bin, e),
-            }
-
-            // Create the window programmatically so we can inject an initialization_script.
-            // This runs BEFORE any page JS (including bundled modules), so ports.js will
-            // correctly read window.__DSX_PORTS__ at module-load time.
+            // Inject ports into the WebView before any page JS runs.
             let init_script = format!(
-                "window.__DSX_PORTS__ = {{ bridge: {}, imageServer: {}, ollama: 11434, lmstudio: 1234, llamacpp: 8080 }};",
-                bridge_port, image_server_port
+                "window.__DSX_PORTS__ = {{ bridge: {}, imageServer: 8001, ollama: 11434 }};",
+                bridge_port
             );
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("/".into()))
@@ -206,16 +112,7 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(move |_window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // Kill image-server (std::process::Child — not managed by tauri-plugin-shell)
-                if let Ok(mut g) = state_exit.image_server_child.lock() {
-                    if let Some(ref mut c) = *g { let _ = c.kill(); }
-                }
-            }
-        })
         .invoke_handler(tauri::generate_handler![get_bridge_url])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

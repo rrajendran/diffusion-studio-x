@@ -29,9 +29,6 @@
     "externalBin": [
       "binaries/bridge"
     ],
-    "resources": [
-      "binaries/hf-image-server/**/*"
-    ],
     "macOS": {
       "minimumSystemVersion": "11.0",
       "infoPlist": "Info.plist"
