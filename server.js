@@ -296,6 +296,8 @@ app.post('/api/ollama/generate', async (req, res) => {
   const filename = `${slug}-${Date.now()}.png`
   const outPath = join(OUTPUT_DIR, filename)
 
+  console.log(`[ollama] generate request | model=${model} ${width}x${height} ollamaBase=${ollamaBase} outputDir=${OUTPUT_DIR} hasRef=${!!referenceImageUrl}`)
+
   try {
     const body = {
       model,
@@ -306,15 +308,13 @@ app.post('/api/ollama/generate', async (req, res) => {
     }
 
     if (referenceImageUrl) {
-      // Resolve a saved /output/<file> web path to real base64 before sending to Ollama.
-      // Without this, the raw path string is sent as "base64" and Ollama's Go decoder
-      // throws "illegal base64 data at input byte 4" on the second generation.
       let resolvedRef = referenceImageUrl
       if (referenceImageUrl.startsWith('/output/')) {
         try {
           const filePath = join(OUTPUT_DIR, referenceImageUrl.replace(/^\/output\//, ''))
           const buf = await readFile(filePath)
           resolvedRef = buf.toString('base64')
+          console.log(`[ollama] resolved reference image from disk: ${filePath}`)
         } catch (err) {
           console.warn(`[ollama] could not resolve reference image path: ${err.message}`)
           resolvedRef = null
@@ -325,13 +325,14 @@ app.post('/api/ollama/generate', async (req, res) => {
       if (resolvedRef) body.images = [resolvedRef]
     }
 
-    // Use fetch with an explicit 20-min AbortController so slow image models
-    // don't hit undici's default 300s headersTimeout mid-inference.
+    const ollamaUrl = `${ollamaBase}/api/generate`
+    console.log(`[ollama] → POST ${ollamaUrl} | model=${model} stream=false`)
+
     const ollamaAbort = new AbortController()
     const ollamaTimer = setTimeout(() => ollamaAbort.abort(), 1_200_000)
     let ollamaFetch
     try {
-      ollamaFetch = await fetch(`${ollamaBase}/api/generate`, {
+      ollamaFetch = await fetch(ollamaUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -339,6 +340,7 @@ app.post('/api/ollama/generate', async (req, res) => {
       })
     } catch (fetchErr) {
       clearTimeout(ollamaTimer)
+      console.error(`[ollama] fetch error | name=${fetchErr.name} code=${fetchErr.cause?.code ?? fetchErr.code ?? '—'} message=${fetchErr.message}`)
       if (fetchErr.name === 'AbortError') throw new Error('Ollama request timed out after 20 minutes')
       const cause = fetchErr.cause?.code ?? fetchErr.code ?? ''
       if (cause === 'ECONNREFUSED') throw new Error(`Cannot connect to Ollama at ${ollamaBase} — is Ollama installed and running?`)
@@ -346,14 +348,21 @@ app.post('/api/ollama/generate', async (req, res) => {
     }
     clearTimeout(ollamaTimer)
 
+    console.log(`[ollama] ← status=${ollamaFetch.status} ok=${ollamaFetch.ok}`)
+
     const rawText = await ollamaFetch.text()
+    console.log(`[ollama] raw response length=${rawText.length} preview="${rawText.slice(0, 120).replace(/\n/g, '\\n')}"`)
+
     if (!rawText || !rawText.trim()) {
       throw new Error(`Ollama returned an empty response (status ${ollamaFetch.status})`)
     }
 
     // Ollama may stream NDJSON even with stream:false on some versions —
     // take only the last non-empty line so JSON.parse gets a complete object.
-    const lastLine = rawText.trim().split('\n').filter(Boolean).at(-1)
+    const lines = rawText.trim().split('\n').filter(Boolean)
+    const lastLine = lines.at(-1)
+    console.log(`[ollama] response lines=${lines.length} lastLine="${lastLine?.slice(0, 80)}"`)
+
     let data
     try {
       data = JSON.parse(lastLine)
@@ -363,10 +372,16 @@ app.post('/api/ollama/generate', async (req, res) => {
 
     if (!ollamaFetch.ok) throw new Error(data.error ?? `Ollama error: ${ollamaFetch.status}`)
 
-    if (!data.image) throw new Error('Ollama returned no image data')
-    // console.log(`[Ollama] generation successful, saving image... ${data.image.slice(0, 30)}...`)
+    if (!data.image) {
+      console.error(`[ollama] no image field in response — keys present: ${Object.keys(data).join(', ')}`)
+      throw new Error('Ollama returned no image data')
+    }
+
+    console.log(`[ollama] image data received, length=${data.image.length} | saving to ${outPath}`)
     const imageBuffer = Buffer.from(data.image, 'base64')
     await writeFile(outPath, imageBuffer)
+    console.log(`[ollama] ✓ saved ${filename} (${imageBuffer.length} bytes)`)
+
     res.json({
       imageUrl: `/output/${filename}`,
       meta: {
@@ -379,7 +394,7 @@ app.post('/api/ollama/generate', async (req, res) => {
       },
     })
   } catch (err) {
-    console.error('[ollama] generate error:', err.message)
+    console.error(`[ollama] ✗ generate failed: ${err.message}`)
     res.status(500).json({ error: err.message })
   }
 })
@@ -483,5 +498,9 @@ app.post('/api/save-image', async (req, res) => {
 
 const PORT = process.env.BRIDGE_PORT ?? process.env.PORT ?? 3001
 mkdir(OUTPUT_DIR, { recursive: true })
-  .then(() => app.listen(PORT, () => console.log(`Ollama bridge running on http://localhost:${PORT}`)))
-  .catch(err => { console.error('Failed to create output dir:', err); process.exit(1) })
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`[bridge] started | port=${PORT} outputDir=${OUTPUT_DIR} isSnapshot=${_isSnapshot} platform=${process.platform} arch=${process.arch} node=${process.version}`)
+    })
+  })
+  .catch(err => { console.error('[bridge] Failed to create output dir:', err); process.exit(1) })
